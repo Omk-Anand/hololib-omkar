@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 360" width="680" height="360" role="img" aria-label="Artificial potential fields: the target attracts the robot while the obstacle repels it, producing a path that glides around">
+  <style>
+    text { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .h   { font-weight: 700; font-size: 13.5px; fill: #20203c; }
+    .lbl { font-size: 13px; font-weight: 600; }
+    .key { font-size: 13px; fill: #5a5a6e; }
+  </style>
+  <defs>
+    <marker id="path" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5b54e6"/>
+    </marker>
+    <marker id="rep" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#e8613c"/>
+    </marker>
+    <marker id="att" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#1f9d63"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="678" height="358" rx="16" fill="#ffffff" stroke="#e7e6fb" stroke-width="2"/>
+
+  <!-- obstacle influence ring -->
+  <circle cx="360" cy="158" r="98" fill="none" stroke="#f0b6a3" stroke-width="1.6" stroke-dasharray="6 6"/>
+  <!-- obstacle -->
+  <circle cx="360" cy="158" r="54" fill="#fdebe4" stroke="#e8613c" stroke-width="2.2"/>
+  <text class="h" x="360" y="163" text-anchor="middle" fill="#c14a28">obstacle</text>
+
+  <!-- repulsive arrows radiating outward -->
+  <g stroke="#e8613c" stroke-width="2" marker-end="url(#rep)">
+    <line x1="360" y1="100" x2="360" y2="74"/>
+    <line x1="402" y1="116" x2="423" y2="95"/>
+    <line x1="416" y1="158" x2="444" y2="158"/>
+    <line x1="402" y1="200" x2="423" y2="221"/>
+    <line x1="318" y1="116" x2="297" y2="95"/>
+    <line x1="304" y1="158" x2="276" y2="158"/>
+    <line x1="318" y1="200" x2="297" y2="221"/>
+  </g>
+
+  <!-- robot -->
+  <rect x="58" y="262" width="44" height="44" rx="8" fill="#5b54e6"/>
+  <text class="lbl" x="80" y="330" text-anchor="middle" fill="#4640c4">robot</text>
+
+  <!-- target -->
+  <circle cx="608" cy="120" r="12" fill="#1f9d63"/>
+  <circle cx="608" cy="120" r="22" fill="none" stroke="#1f9d63" stroke-width="1.4" stroke-dasharray="4 4"/>
+  <text class="lbl" x="608" y="166" text-anchor="middle" fill="#177a4d">target</text>
+
+  <!-- the resulting path -->
+  <path d="M104,282 C200,300 250,318 330,300 C420,280 470,238 520,196 C555,166 578,142 596,128"
+        fill="none" stroke="#5b54e6" stroke-width="3.2" marker-end="url(#path)"/>
+
+  <!-- force breakdown at a point on the path -->
+  <circle cx="330" cy="300" r="4.5" fill="#20203c"/>
+  <!-- attractive toward target (up-right) -->
+  <line x1="330" y1="300" x2="404" y2="250" stroke="#1f9d63" stroke-width="2.4" marker-end="url(#att)"/>
+  <!-- repulsive away from obstacle (down) -->
+  <line x1="330" y1="300" x2="318" y2="346" stroke="#e8613c" stroke-width="2.4" marker-end="url(#rep)"/>
+
+  <!-- legend -->
+  <g transform="translate(120,28)">
+    <line x1="0" y1="0" x2="26" y2="0" stroke="#1f9d63" stroke-width="2.6" marker-end="url(#att)"/>
+    <text class="key" x="34" y="4">attractive pull (toward target)</text>
+    <line x1="300" y1="0" x2="326" y2="0" stroke="#e8613c" stroke-width="2.6" marker-end="url(#rep)"/>
+    <text class="key" x="334" y="4">repulsive push (away from obstacle)</text>
+  </g>
+</svg>

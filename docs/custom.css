@@ -1,0 +1,430 @@
+/* ===========================================================================
+   HoloLib documentation theme
+   Brand layer on top of doxygen-awesome-css. Tuned for a clean, modern,
+   "holographic" indigo/violet identity with a refined dark mode.
+   =========================================================================== */
+
+html {
+    /* Brand palette ------------------------------------------------------- */
+    --primary-color:          #5b54e6;
+    --primary-dark-color:     #4640c4;
+    --primary-light-color:    #8b86f0;
+    --primary-lighter-color:  #e7e6fb;
+    --primary-lightest-color: #f4f4fe;
+
+    /* Typography ---------------------------------------------------------- */
+    --page-font-size: 15.6px;
+    --navigation-font-size: 14.5px;
+    --toc-font-size: 13.4px;
+    --code-font-size: 14px;
+    --content-maxwidth: 1180px;
+
+    /* Shape & spacing ----------------------------------------------------- */
+    --border-radius-large: 12px;
+    --border-radius-small: 7px;
+    --border-radius-medium: 9px;
+    --spacing-large: 14px;
+    --spacing-medium: 11px;
+
+    /* Header -------------------------------------------------------------- */
+    --header-foreground: #ffffff;
+    --searchbar-background: rgba(255, 255, 255, 0.92);
+    --searchbar-border-radius: 8px;
+
+    /* Sidebar-only layout pins the title block (#top) to a fixed height with
+       overflow:hidden, and the nav tree starts directly below it. The default
+       120px is too short once the project brief wraps to two lines, which
+       clips the search box and lets the first nav entry overlap it. Give the
+       header enough room for title + 2-line brief + search box. */
+    --top-height: 166px;
+
+    /* Misc ---------------------------------------------------------------- */
+    --side-nav-background: #f7f7fb;
+    --odd-color: #fafaff;
+}
+
+html.dark-mode {
+    --primary-color:          #9a95ff;
+    --primary-dark-color:     #b6b2ff;
+    --primary-light-color:    #6f6ad6;
+    --primary-lighter-color:  #2a2950;
+    --primary-lightest-color: #20203c;
+
+    --page-background-color: #15151f;
+    --side-nav-background: #1b1b29;
+    --header-foreground: #ffffff;
+    --searchbar-background: rgba(255, 255, 255, 0.08);
+    --odd-color: #1a1a26;
+    --separator-color: #2c2c40;
+}
+
+/* ---- Gradient header bar (the HoloLib signature) ----------------------- */
+#top {
+    background: linear-gradient(120deg, #4640c4 0%, #5b54e6 45%, #8b6cf0 100%);
+    box-shadow: 0 2px 14px rgba(70, 64, 196, 0.28);
+    border-bottom: none;
+}
+html.dark-mode #top {
+    background: linear-gradient(120deg, #1f1d4a 0%, #322c8c 50%, #4b3a96 100%);
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+}
+
+#titlearea {
+    background: transparent;
+    border-bottom: none;
+}
+
+#projectname {
+    color: var(--header-foreground);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+#projectbrief {
+    color: rgba(255, 255, 255, 0.82);
+    font-weight: 400;
+}
+
+/* Main menu sits on the gradient -> make it readable */
+#main-menu > li > a {
+    color: rgba(255, 255, 255, 0.88) !important;
+    font-weight: 500;
+}
+#main-menu > li > a:hover {
+    color: #ffffff !important;
+}
+.sm-dox a, .sm-dox a:focus, .sm-dox a:hover, .sm-dox a:active {
+    text-shadow: none;
+}
+
+/* Search box on the gradient header */
+#MSearchBox {
+    box-shadow: none;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+/* ---- Headings ---------------------------------------------------------- */
+h1, h2, h3, h4, h5 { letter-spacing: -0.3px; }
+h1.groupheader, h2.groupheader {
+    border-bottom: 2px solid var(--primary-lighter-color);
+    color: var(--primary-dark-color);
+}
+
+/* ---- Landing page hero (the README title block) ------------------------ */
+div.contents .textblock > h1:first-child,
+.title {
+    font-weight: 800;
+}
+
+/* ---- Cards / panels ---------------------------------------------------- */
+.memtitle {
+    background: var(--primary-lightest-color);
+    border-color: var(--primary-lighter-color);
+}
+table.memberdecls .heading {
+    background: transparent;
+}
+
+/* ---- Code blocks ------------------------------------------------------- */
+div.fragment, pre.fragment {
+    border-radius: var(--border-radius-medium);
+    border-left: 4px solid var(--primary-color);
+}
+
+/* ---- Links ------------------------------------------------------------- */
+a { font-weight: 500; }
+
+/* ---- Sidebar nav active state ------------------------------------------ */
+#nav-tree .selected {
+    background-image: none;
+    background-color: var(--primary-color);
+    border-radius: 6px;
+    text-shadow: none;
+}
+#nav-tree .selected a { color: #ffffff !important; }
+
+/* ---- Footer ------------------------------------------------------------ */
+.footer {
+    opacity: 0.7;
+    font-size: 12.5px;
+}
+
+/* ---- Tables ------------------------------------------------------------ */
+.directory tr.even { background-color: var(--odd-color); }
+
+/* ===========================================================================
+   Landing-page readability layer
+   Targets the README mainpage: comfortable text, real callouts, figure
+   styling for the diagrams, and cleaner markdown tables.
+   =========================================================================== */
+
+/* ---- Reading rhythm ---------------------------------------------------- */
+div.contents p,
+div.contents li {
+    line-height: 1.72;
+}
+div.contents li { margin: 0.25em 0; }
+
+/* Breathing room between the major sections of the page */
+div.contents h1,
+div.contents h2.groupheader {
+    margin-top: 2.3em;
+    padding-top: 0.25em;
+}
+div.contents h3 { margin-top: 1.6em; }
+
+/* The `---` dividers in the README */
+div.contents hr {
+    border: none;
+    border-top: 1px solid var(--primary-lighter-color);
+    margin: 2.6em 0;
+}
+html.dark-mode div.contents hr { border-top-color: var(--separator-color); }
+
+/* ---- Callouts (markdown blockquotes) ----------------------------------- */
+div.contents blockquote {
+    margin: 1.5em 0;
+    padding: 0.85em 1.15em;
+    background: #fff8ec;
+    border: 1px solid #f1d79e;
+    border-left: 4px solid #e6a23c;
+    border-radius: var(--border-radius-medium);
+    color: #5c4a26;
+}
+div.contents blockquote p { margin: 0.15em 0; }
+div.contents blockquote strong { color: #b06f12; }
+html.dark-mode div.contents blockquote {
+    background: rgba(230, 162, 60, 0.09);
+    border-color: rgba(230, 162, 60, 0.32);
+    border-left-color: #e6a23c;
+    color: #e7d6b6;
+}
+html.dark-mode div.contents blockquote strong { color: #f0b54e; }
+
+/* ---- Figures (the SVG diagrams) ---------------------------------------- */
+div.contents div.image {
+    text-align: center;
+    margin: 1.9em auto 0.4em;
+}
+div.contents div.image img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--border-radius-large);
+    border: 1px solid var(--primary-lighter-color);
+    background: #ffffff;            /* keep the figure card light in both themes */
+    padding: 10px;
+    box-shadow: 0 3px 14px rgba(70, 64, 196, 0.10);
+}
+div.contents div.caption {
+    text-align: center;
+    font-size: 13px;
+    font-style: italic;
+    color: #8a8aa2;
+    margin: 0.55em auto 1.9em;
+    max-width: 82%;
+}
+
+/* ---- Markdown tables --------------------------------------------------- */
+div.contents table.markdownTable {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.6em 0;
+    border-radius: var(--border-radius-medium);
+    overflow: hidden;
+    box-shadow: 0 1px 5px rgba(70, 64, 196, 0.08);
+}
+div.contents table.markdownTable th {
+    background: var(--primary-color);
+    color: #ffffff !important;
+    font-weight: 600;
+    text-align: left;
+    padding: 11px 15px;
+    border: none;
+}
+div.contents table.markdownTable td {
+    padding: 10px 15px;
+    border: none;
+    border-top: 1px solid var(--primary-lighter-color);
+}
+div.contents table.markdownTable tr:nth-child(even) td {
+    background: var(--odd-color);
+}
+html.dark-mode div.contents table.markdownTable td {
+    border-top-color: var(--separator-color);
+}
+
+/* ===========================================================================
+   Motion & polish layer
+   On-brand micro-interactions and animations. Everything here is purely
+   cosmetic and is fully disabled under `prefers-reduced-motion` (see the
+   bottom of this file), so it never gets in the way of reading or a11y.
+   =========================================================================== */
+
+/* ---- Keyframes --------------------------------------------------------- */
+@keyframes holo-gradient-pan {
+    0%   { background-position:   0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position:   0% 50%; }
+}
+@keyframes holo-fade-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes holo-sheen {
+    0%   { transform: translateX(-120%) skewX(-18deg); }
+    100% { transform: translateX(220%)  skewX(-18deg); }
+}
+
+/* ---- Living gradient header -------------------------------------------- */
+/* Stretch the gradient and pan it slowly so the header feels "holographic". */
+#top {
+    background-size: 200% 200%;
+    animation: holo-gradient-pan 18s ease infinite;
+    position: relative;
+    overflow: hidden;
+}
+/* A soft light sheen that sweeps across the header once on load. */
+#top::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 45%;
+    height: 100%;
+    pointer-events: none;
+    background: linear-gradient(
+        100deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.18) 50%,
+        rgba(255, 255, 255, 0) 100%);
+    animation: holo-sheen 2.6s ease-out 0.4s 1;
+}
+
+/* ---- Page content entrance --------------------------------------------- */
+/* The main page fades up gently on first paint. */
+div.contents {
+    animation: holo-fade-up 0.5s ease both;
+}
+
+/* ---- Links: animated underline ----------------------------------------- */
+div.contents p a,
+div.contents li a {
+    background-image: linear-gradient(var(--primary-color), var(--primary-color));
+    background-size: 0% 2px;
+    background-position: 0 100%;
+    background-repeat: no-repeat;
+    transition: background-size 0.25s ease, color 0.2s ease;
+    text-decoration: none;
+}
+div.contents p a:hover,
+div.contents li a:hover {
+    background-size: 100% 2px;
+}
+
+/* ---- Search box focus glow --------------------------------------------- */
+#MSearchBox {
+    transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+#MSearchBox:focus-within,
+#MSearchBox.MSearchBoxActive {
+    border-color: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 3px rgba(155, 149, 255, 0.35);
+}
+
+/* ---- Nav tree: slide-in highlight on hover ----------------------------- */
+#nav-tree a {
+    transition: color 0.18s ease, transform 0.18s ease;
+}
+#nav-tree .item:hover {
+    transform: translateX(3px);
+}
+#nav-tree .selected {
+    transition: background-color 0.2s ease;
+}
+
+/* ---- Code blocks: lift on hover ---------------------------------------- */
+div.fragment,
+pre.fragment {
+    transition: box-shadow 0.25s ease, border-left-color 0.25s ease,
+                transform 0.25s ease;
+}
+div.fragment:hover,
+pre.fragment:hover {
+    box-shadow: 0 6px 22px rgba(70, 64, 196, 0.16);
+    border-left-color: var(--primary-light-color);
+    transform: translateY(-2px);
+}
+
+/* ---- Callouts (blockquotes): hover emphasis ---------------------------- */
+div.contents blockquote {
+    transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+div.contents blockquote:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(230, 162, 60, 0.18);
+}
+
+/* ---- Figures: gentle zoom on hover ------------------------------------- */
+div.contents div.image img {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+div.contents div.image img:hover {
+    transform: scale(1.015);
+    box-shadow: 0 10px 30px rgba(70, 64, 196, 0.20);
+}
+
+/* ---- Tables: row hover -------------------------------------------------- */
+div.contents table.markdownTable td {
+    transition: background-color 0.18s ease;
+}
+div.contents table.markdownTable tr:hover td {
+    background: var(--primary-lighter-color);
+}
+
+/* ---- Member cards: lift ------------------------------------------------- */
+.memtitle {
+    transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.memitem:hover .memtitle {
+    box-shadow: 0 5px 18px rgba(70, 64, 196, 0.14);
+    transform: translateY(-1px);
+}
+
+/* ===========================================================================
+   Scroll reveal   (applied by holo-enhance.js as blocks enter the viewport)
+   The dedicated landing page at the site root handles the big title treatment;
+   the docs pages just get this gentle reveal as you scroll.
+   =========================================================================== */
+.holo-reveal {
+    opacity: 0;
+    transform: translateY(26px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+    will-change: opacity, transform;
+}
+.holo-reveal.holo-in {
+    opacity: 1;
+    transform: none;
+}
+
+/* ---- Respect reduced-motion -------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    #top,
+    #top::after,
+    div.contents {
+        animation: none !important;
+        transition: none !important;
+    }
+    div.contents div.image img:hover,
+    div.fragment:hover,
+    pre.fragment:hover,
+    div.contents blockquote:hover,
+    #nav-tree .item:hover,
+    .memitem:hover .memtitle {
+        transform: none !important;
+    }
+    /* Never leave reveal blocks stuck invisible. */
+    .holo-reveal {
+        opacity: 1 !important;
+        transform: none !important;
+    }
+}
