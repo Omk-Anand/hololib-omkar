@@ -10,6 +10,123 @@ verified on the robot or only compiled.
 
 ---
 
+## 2026-09-07
+
+### 1. Enabled true field-centric driver control
+
+User asked for field-centric driving: joystick-forward should always mean the
+direction the bot faced when `opcontrol()` started, no matter what heading
+the bot is currently at. The mechanism for this already existed in
+`Chassis::driveControl`/`Chassis::drive` (rotate the joystick vector by
+`currentHeading` before applying it) — it just wasn't switched on, and the
+heading source that feeds it was actively broken for this purpose. Two
+changes, both required:
+
+1. `chassis.driveControl(...)`'s `fieldCentric` argument was `false` — set it
+   to `true`.
+2. `opcontrol()` called `odom.setKalmanFilterEnabled(false)`. Per
+   `EncoderEKFOdometry::update()` (`src/localization/odometry.cpp`), with the
+   EKF off, heading integrates purely from wheel-encoder deltas
+   (`currentPose.theta += d_theta_wheels`) instead of fusing in the IMU —
+   drifts fast on an X-drive with no tracking wheels registered. Field-centric
+   reads that same heading every tick to rotate the joystick vector, so a
+   drifting heading would make "forward" slowly rotate away from the bot's
+   actual starting direction even though the fieldCentric flag itself was
+   working correctly. Changed to `setKalmanFilterEnabled(true)` (the class's
+   own default) so heading stays IMU-anchored instead.
+
+Turning on `fieldCentric` alone, without also fixing the heading source,
+would have looked like it worked for the first few seconds and then drifted —
+worth knowing if this ever needs revisiting.
+
+Build verified only (`make quick`, clean compile/link) — not tested on
+hardware.
+
+### 2. Consolidated intake + claw gripper onto B/Y, retired DOWN/RIGHT
+
+User wanted four buttons (DOWN, RIGHT, B, Y) collapsed into two: B and Y each
+now drive both `intake` and `clawGripper` together, matching whatever
+direction each motor already spun under its own old button:
+
+- **B**: intake `+12000` (was DOWN's direction) + clawGripper `+12000` (same
+  as B always was) — "intake in / claw in".
+- **Y**: intake `-12000` (was RIGHT's direction) + clawGripper `-12000` (same
+  as Y always was) — "intake out / claw out".
+
+DOWN/RIGHT no longer do anything (their old `if`/`else if` block is gone,
+folded into the B/Y block above). No direction changes to either motor, only
+which button(s) trigger them.
+
+Build verified only (`make quick`, clean compile/link) — not tested on
+hardware.
+
+### 3. Moved `backRight` drivetrain motor from port 19 to port 17
+
+`backRPort` changed from `19` to `17` — port number only, no sign/direction
+change, since `backRight` is constructed with a positive port
+(`pros::Motor(backRPort, pros::MotorGear::blue)`) and `Chassis::drive()`
+already applies `backRight`'s inversion internally (`move_voltage(
+motorVoltageVector(2))`, not negated, matching how it was wired at port 19).
+
+Build verified only (`make quick`, clean compile/link) — not tested on
+hardware.
+
+### 4. Grouped `liftLift` and `clawRotationLift` under one `liftlib::Lift`
+
+Teammate's suggestion: since the claw physically rides on the elevator (a
+parent/child relationship), the two stages should be grouped the way the
+liftlib README's "multi stage lift" section describes
+(`Lift{&stage1, &stage2, ...}`), instead of existing as two totally
+independent `Subsystem`s. Added:
+
+```cpp
+liftlib::Lift liftAssembly({&liftLift, &clawRotationLift});
+```
+
+declared after both, ordered lift-then-claw to match the physical
+parent/child relationship. `initialize()` now calls
+`liftAssembly.initialize()` once instead of `clawRotationLift.initialize();
+liftLift.initialize();` separately — confirmed by reading
+`Lift::initialize()` in `src/liftlib/lift.cpp` that it's just a loop calling
+`stage->initialize()` on everything it owns, in the order given to the
+constructor, so this is behaviorally identical to the two separate calls it
+replaces.
+
+**Explicitly did not touch anything else**, per instruction that controls
+must stay the same and `clawRotationPID`'s tuning is good and not to be
+disturbed. `opcontrol()`'s `L1`/`L2` jog (`clawRotationLift.setOutput()`/
+`.holdActively()`), `R1`/`R2` (raw `liftMotors` voltage, unrelated to either
+`Subsystem`), and `autonomous()`'s individual `moveTo()` test calls are all
+untouched, still calling `clawRotationLift`/`liftLift` directly rather than
+through `liftAssembly`. This is safe per the README's own caveat — "Lift owns
+the motion **while** a group move runs... do not drive a stage directly while
+a group move that includes it is running" — nothing in this file ever calls
+`liftAssembly.moveTo()` or `liftAssembly.hold()`, so no group move is ever in
+progress, and direct per-stage calls keep behaving exactly as before.
+
+What this sets up for later, without requiring it now: `liftAssembly.moveTo(
+{heightTarget, angleTarget}, ...)` to raise the lift and rotate the claw as
+one coordinated macro, `liftAssembly.hold()` to hold both at once, and
+`Precedence`/conditional actions scoped to one or both stages — none of which
+is wired up yet.
+
+Build verified only (`make quick`, clean compile/link) — not tested on
+hardware.
+
+### 5. Fixed a stale comment (9.5" → 10") in `autonomous()`
+
+The lift's test comment still said "9.5"" from before the GainPoint/target
+were changed to `10.0f`; updated the wording to match the actual code, no
+behavior change. Also noted explicitly that the LCD's "Lift (in)" line
+updates live throughout `autonomous()`, not just after it returns, since
+`screen_task` polls `liftLift.getPosition()` in its own background task every
+50ms.
+
+Build verified only (`make quick`, clean compile/link) — not tested on
+hardware.
+
+---
+
 ## 2026-09-05
 
 ### 1. Removed `clawGripperPID`/`clawGripperLift` — wrong control model for the mechanism

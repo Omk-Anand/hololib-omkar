@@ -26,7 +26,7 @@
 int frontLPort = 11;
 int frontRPort = 12;
 int backLPort = 20;
-int backRPort = 19;
+int backRPort = 17;
 
 // IMU port
 int imuPort = 18;
@@ -208,6 +208,30 @@ liftlib::Subsystem liftLift(
         {liftlib::PID(/*kP=*/1.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/19.0f},
     });
 
+// --- liftAssembly: liftLift + clawRotationLift as one liftlib::Lift --------
+// The claw physically rides on top of the elevator -- the elevator is the
+// parent stage, the claw is the child riding on it -- so they're grouped
+// under one liftlib::Lift the way the README's "multi stage lift" section
+// describes (Lift{&stage1, &stage2, ...}). Order matches that relationship:
+// liftLift first, clawRotationLift second.
+//
+// This is purely additive -- it does NOT change opcontrol()/autonomous()
+// below, on purpose, because clawRotationPID is tuned and working and R1/R2 +
+// L1/L2 + moveTo() already call clawRotationLift/liftLift directly. Per the
+// README: "Lift owns the motion while a group move runs... Do not drive a
+// stage directly while a group move that includes it is running" -- the
+// operative word is WHILE. Nothing here ever calls liftAssembly.moveTo() or
+// liftAssembly.hold(), so no group move is ever in progress, and every direct
+// call already in this file (setOutput(), holdActively(), the individual
+// moveTo()s) keeps working exactly as it did before this object existed.
+//
+// What this buys us, for later: liftAssembly.initialize() to tare both in one
+// call (used in initialize() below), and the option to eventually command
+// both together for a macro -- e.g. liftAssembly.moveTo({19.0f, 90.0f}) to
+// raise the lift and rotate the claw as one coordinated move -- without
+// having to restructure anything now.
+liftlib::Lift liftAssembly({&liftLift, &clawRotationLift});
+
 
 
 
@@ -256,9 +280,13 @@ void initialize() {
     chassis.calibrate();
     odom.startTask();
 
-    // Tares the pivot motor and seeds its position reading. Whatever the claw
-    // is resting at when the program starts becomes 0 for this subsystem.
-    clawRotationLift.initialize();
+    // Tares both stages and seeds their position readings in one call --
+    // Lift::initialize() just loops calling stage->initialize() on everything
+    // it owns (liftLift, then clawRotationLift, the order given at
+    // liftAssembly's declaration), so this is identical to calling
+    // clawRotationLift.initialize() and liftLift.initialize() separately, the
+    // way it was done before liftAssembly existed.
+    liftAssembly.initialize();
 
     // clawRotation pivots (it can point at the ceiling or the ground), so the
     // torque needed to hold it depends on angle -- Cosine, not a constant push.
@@ -272,8 +300,7 @@ void initialize() {
     //       what kG is.
     clawRotationLift.setFeedforward(liftlib::Feedforward::cosine(/*kG=*/0.0f, /*horizontal=*/0.0f, /*degreesPerUnit=*/1.0f));
 
-    // Tares the elevator and seeds its position reading, same as clawRotationLift.
-    liftLift.initialize();
+    // liftLift was already tared above by liftAssembly.initialize().
 
     // Constant, not cosine -- a cascade's load doesn't change with height. kG is
     // a unit conversion from ModularLift's own kG_base (see comment where liftLift
@@ -378,10 +405,13 @@ void autonomous() {
     // clawRotationLift.moveTo(90.0f, /*async=*/false, /*timeout=*/3000);
 
     // --- liftLift PID tuning -------------------------------------------------
-    // Blocking moveTo to the lower of the two real working heights (9.5",
-    // see the gain-schedule comment above liftLift's declaration). Waits (up
-    // to 3s) for it to settle before autonomous() returns, so the LCD's
-    // "Lift (in)" reading (line 7) shows where it actually stopped.
+    // Blocking moveTo to the lower of the two real working heights (10",
+    // matching the first GainPoint above). Waits (up to 5s) for it to settle
+    // before autonomous() returns, so the LCD's "Lift (in)" reading (line 7)
+    // shows where it actually stopped -- it updates live the whole time
+    // autonomous() runs too, not just at the end, since screen_task
+    // (initialize() below) reads liftLift.getPosition() every 50ms in its own
+    // background task.
     //
     // Direction is a guess, same as the claw's was: ports are {6, -7}, the
     // same pair R1/R2 already drive raw in opcontrol where R1 ("Lift up")
@@ -392,11 +422,11 @@ void autonomous() {
     // negating the target here, so moveTo() and the R1/R2 raw jog stay
     // pointed the same way as each other.
     //
-    // Tune kP/kD on the 9.5" GainPoint above first (raise kP until it gets
+    // Tune kP/kD on the 10" GainPoint above first (raise kP until it gets
     // close with a little overshoot, add just enough kD to kill the
     // overshoot), then come back and tune kG on liftLift's Feedforward in
-    // initialize() by watching whether it holds 9.5" or sags after settling.
-    // Once 9.5" is clean, change the 9.5f below to 19.0f and repeat for the
+    // initialize() by watching whether it holds 10" or sags after settling.
+    // Once 10" is clean, change the 10.0f below to 19.0f and repeat for the
     // top GainPoint.
     liftLift.initialize();
     liftLift.moveTo(10.0f, /*async=*/false, /*timeout=*/5000);
@@ -406,7 +436,13 @@ void autonomous() {
 
 void opcontrol() {
   pros::lcd::print(6,"test");
-  odom.setKalmanFilterEnabled(false);
+  // Field-centric driving reads currentHeading from odom every tick and
+  // rotates the joystick vector by it -- that only stays correct if heading
+  // doesn't drift. With the EKF off, heading integrates purely from wheel
+  // encoders (EncoderEKFOdometry::update's non-EKF branch), which drifts fast
+  // on an X-drive with no tracking wheels registered. Leaving the EKF on (the
+  // default) fuses in the IMU instead, which doesn't drift the same way.
+  odom.setKalmanFilterEnabled(true);
   odom.setPose(0, 0, 0);
   hololib::Chassis::DriveCurve movement_curve{.curve_multipler = 1.01, .deadzone = 5, .minimum_output = 5};
   hololib::Chassis::DriveCurve rotation_curve{.curve_multipler = 1.028, .deadzone = 5, .minimum_output = 5};
@@ -447,22 +483,23 @@ void opcontrol() {
 
     }
 
-    if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) {
-      std::cout << "Intake in" << std::endl;
-      intake.move_voltage(12000);
-    } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
-      std::cout << "Intake out" << std::endl;
-      intake.move_voltage(-12000);
-    } else {
-      intake.move_voltage(0);
-    }
-
-
+    // B and Y each drive both the intake rollers and the claw gripper
+    // together, one button per direction -- DOWN/RIGHT (old intake-only
+    // controls) are retired, folded into these two. Directions match what
+    // each motor already did on its own old button: B = intake's old DOWN
+    // direction (+12000) + clawGripper's old B direction (+12000). Y =
+    // intake's old RIGHT direction (-12000) + clawGripper's old Y direction
+    // (-12000, unchanged).
     if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_B)) {
+      std::cout << "Intake in / claw in" << std::endl;
+      intake.move_voltage(-12000);
       clawGripper.move_voltage(12000);
-    } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y)){
+    } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y)) {
+      std::cout << "Intake out / claw out" << std::endl;
+      intake.move_voltage(12000);
       clawGripper.move_voltage(-12000);
     } else {
+      intake.move_voltage(0);
       clawGripper.move_voltage(0);
     }
 
@@ -484,9 +521,14 @@ void opcontrol() {
     }
 
 
+    // fieldCentric = true: "forward" on the joystick always means the
+    // direction the bot faced at the start of opcontrol() (heading 0, set by
+    // odom.setPose(0,0,0) above), regardless of the bot's current heading.
+    // Depends on odom.setKalmanFilterEnabled(true) above for accurate,
+    // non-drifting heading -- this flag alone does nothing useful without that.
     chassis.driveControl(
         forward, sideways, rotation,
-        {.movement = movement_curve, .rotation = rotation_curve}, false, 90,
+        {.movement = movement_curve, .rotation = rotation_curve}, true, 90,
         {.correctionOn = false, .kP = 0.15f, .kI = 0.01f, .kD = 0.01f});
     pros::delay(20);
   }
