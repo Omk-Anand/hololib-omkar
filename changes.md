@@ -142,15 +142,17 @@ Deliberately minimal — only what was needed to build.
 
 1. ~~Confirm the port 9/10 wiring~~ **Done** -- confirmed correct, see §1.
 2. ~~Confirm `visionPort`~~ **N/A** -- no sensor on the robot; commented out (see §4b).
-3. **Confirm the claw pivot direction.** Port 9 is configured reversed (`.port = -9`).
-   Press L1 and check it moves the intended way; flip the sign if not.
+3. ~~Confirm the claw pivot direction~~ **Done** -- confirmed by Ashmit: L1 raises the
+   claw as intended, so `.port = -9` is correct as written.
 4. ~~Verify `LIFT_SPOOL_RADIUS_IN` and `LIFT_GEAR_RATIO`~~ **Done** -- confirmed by
    Ashmit: spool radius 0.4", no gearing on the lift, so ratio 1.0. The
    motor-degrees-to-inches conversion is correct as written.
-5. **Tune `liftLift`** — kD is 0 at both gain points.
+5. **Tune `liftLift`** — kD is 0 at both gain points. Gains live in the
+   `GainPoint` list in `liftLift`'s declaration in `main.cpp`.
 6. **Tune `clawRotationLift`'s `kG`** — currently 0, so no gravity compensation.
-7. **Nothing calls `liftLift.moveTo()` yet** — the controller exists but is not bound
-   to a button or an autonomous step.
+7. ~~Nothing calls `liftLift.moveTo()`~~ **Done** — `autonomous()` now does a blocking
+   `liftLift.moveTo(10.0f, false, 5000)` so the lift PID can be tuned against LCD
+   line 7. The `turnToHeading(90)` is commented out during tuning.
 8. ~~`my_lift` is dead code~~ **Done** -- removed, see §4c.
 9. ~~`CLAUDE.md` untracked~~ **Done** -- updated for this codebase and added to
    `.gitignore`, so it stays local and out of the shared repo.

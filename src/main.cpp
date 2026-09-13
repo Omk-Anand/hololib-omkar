@@ -16,6 +16,7 @@
 #include "pros/imu.hpp"
 #include "pros/misc.h"
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <print>
 
@@ -84,7 +85,17 @@ pros::Motor intake = pros::Motor(8, pros::MotorGear::blue);
 
 // Claw pivot, port 9 reversed. Targets are degrees at the claw; 12:60 is the
 // gearbox (5:1 reduction).
-liftlib::PID clawRotationPID(/*kP=*/15.0f, /*kI=*/0.0001f, /*kD=*/16.0f, /*threshold=*/2.0f);
+//
+// 0 is the resting state, set by initialize() taring wherever the claw sits at
+// boot -- so the claw must rest in the same place every power-on or every target
+// below shifts with it. Real positions: -50 perpendicular (facing the ground),
+// +40 parallel to the ground, +50 matchload.
+//
+// Gains below are being retuned against a 50 degree move (rest -> matchload),
+// which is what autonomous() commands. One PID covers the whole range: a pivot's
+// inertia barely changes across the swing, and the part that does change with
+// angle is gravity, which is the feedforward's job rather than the PID's.
+liftlib::PID clawRotationPID(/*kP=*/5.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/2.0f);
 liftlib::Subsystem clawRotationLift(
     {liftlib::MotorConfig{.port = -9,
                           .gear_ratio = 12.0f / 60.0f,
@@ -115,8 +126,9 @@ liftlib::Subsystem liftLift(
                           .brakeType = pros::E_MOTOR_BRAKE_HOLD,
                           .gearset = pros::MotorGears::blue}},
     std::vector<liftlib::Subsystem::GainPoint>{
-        {liftlib::PID(/*kP=*/10.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/10.0f},
-        {liftlib::PID(/*kP=*/1.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/19.0f},
+        {liftlib::PID(/*kP=*/20.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/12.0f},
+        {liftlib::PID(/*kP=*/0.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/24.0f},
+        {liftlib::PID(/*kP=*/0.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/36.0f},
     });
 
 
@@ -240,19 +252,49 @@ void simulation() {}
 
 void autonomous() {
 
-    chassisAsync(hololib::turnToHeading(90));
-    hololib::motion_handler::waitUntilDone();
+    // --- clawRotationLift PID tuning ----------------------------------------
+    // Blocking 50 degree move upward from rest. Watch LCD line 6 ("Claw rot")
+    // for where it actually stops -- the screen task updates it live while this
+    // runs, so you can see overshoot and settling, not just the final number.
+    //
+    // Positive is up, matching L1 in opcontrol (L1 calls setOutput with a
+    // positive power). If it drives down instead, flip the sign on
+    // clawRotationLift's MotorConfig port rather than negating the target here,
+    // so moveTo() and the L1/L2 jog stay pointed the same way.
+    //
+    // 50 is matchload, the top of the working range (0 rest, -50 perpendicular,
+    // +40 parallel, +50 matchload), so this sweeps rest -> matchload without
+    // driving past a hard stop.
+    //
+    // threshold is 2.0 degrees (set on clawRotationPID), so it stops anywhere in
+    // 48-52 and reports settled -- 4% of a 50 degree move. Tighten it if you need
+    // a finer read while tuning.
+    //
+    // After arriving it brakes rather than actively holding: holdActively()
+    // early-returns to brake() while kG is 0. See the note in opcontrol().
+    clawRotationLift.moveTo(50.0f, /*async=*/false, /*timeout=*/5000);
+
+    // --- liftLift PID tuning (parked) ---------------------------------------
+    // Re-enable when back on the lift. Note the conversion is still wrong:
+    // 12.0f commanded read 10.1-10.2 on the brain and moved ~7.4" for real.
+    // liftLift.moveTo(12.0f, /*async=*/false, /*timeout=*/10000);
+
+    // Chassis turn, parked during tuning. Note that motion speed caps are in
+    // drive-power units but reach move_voltage() as millivolts, so this turns at
+    // roughly 1% power.
+    // chassisAsync(hololib::turnToHeading(90));
+    // hololib::motion_handler::waitUntilDone();
 
 }
 
 
 
+
 void opcontrol() {
-  // Field-centric driving rotates the joystick vector by the heading odom
-  // reports every tick, so it's only correct while heading doesn't drift. With
-  // the EKF off, heading integrates from wheel encoders alone, which drifts
-  // fast on an X-drive with no tracking wheels. Leaving the EKF on fuses in the
-  // IMU instead. The fieldCentric flag below does nothing useful without this.
+  // Kept on even though field-centric is now off. Driving no longer depends on
+  // heading, but the heading-hold correction inside driveControl still does, as
+  // does odometry for autonomous. With the EKF off, heading integrates from
+  // wheel encoders alone and drifts fast on an X-drive with no tracking wheels.
   odom.setKalmanFilterEnabled(true);
   odom.setPose(0, 0, 0);
   hololib::Chassis::DriveCurve movement_curve{.curve_multipler = 1.01, .deadzone = 5, .minimum_output = 5};
@@ -261,11 +303,46 @@ void opcontrol() {
   int prev_sideways = 0;
   int prev_rotation = 0;
 
-  constexpr float CLAW_ROT_JOG_POWER = 60.0f; // -127..127, untuned -- raise if it jogs too slowly
-  bool clawRotJogging = false;
+  // --- claw pivot buttons -------------------------------------------------
+  // Three fixed positions, in degrees from the resting state (0 = wherever the
+  // claw sat at boot, tared by initialize()):
+  //   L2      -> perpendicular to the ground, claw facing down
+  //   L1      -> parallel to the ground, claw level
+  //   L1 + L2 -> matchload
+  //
+  // Absolute targets, not relative steps, so repeated presses always land in the
+  // same place instead of accumulating whatever error each move settles with.
+  //
+  // ⚠️ These three angles are not measured yet -- they follow from "parallel is
+  // +50", with perpendicular derived as 90 degrees below it. Confirm on the
+  // robot and correct here; everything else reads from these constants.
+  constexpr float CLAW_PERPENDICULAR_DEG = -40.0f;
+  constexpr float CLAW_PARALLEL_DEG = 50.0f;
+  constexpr float CLAW_MATCHLOAD_DEG = 60.0f;
 
-  // Hold from the start, not just after the first L1/L2 press, so the claw
-  // fights gravity immediately.
+  // A chord can only be recognised after both buttons have had a chance to
+  // arrive, so a lone press waits out the window before it fires. 100ms is
+  // short enough not to feel laggy and long enough that the two presses do not
+  // have to be simultaneous. The alternative -- acting instantly and reversing
+  // when the second button lands -- would visibly jerk the claw.
+  //
+  // The opcontrol loop ticks every 20ms, so this window is 5 ticks. Do not drop
+  // it much below ~60ms or the two presses would have to land in the same
+  // couple of polls to register as a chord.
+  constexpr std::uint32_t CLAW_CHORD_WINDOW_MS = 100;
+
+  bool prevL1 = false;
+  bool prevL2 = false;
+  bool l1Pending = false;
+  bool l2Pending = false;
+  std::uint32_t l1PressedAt = 0;
+  std::uint32_t l2PressedAt = 0;
+
+  // NOTE: this is currently just a brake. holdActively() early-returns to
+  // brake() whenever the feedforward is disabled, and Feedforward::isEnabled()
+  // is `model != None && kG != 0` -- so with kG=0 (set in initialize()) no hold
+  // task ever starts and the PID never runs. Set a real kG to make this an
+  // actual active hold.
   clawRotationLift.holdActively();
 
   while (true) {
@@ -310,27 +387,44 @@ void opcontrol() {
       clawGripper.move_voltage(0);
     }
 
-    // L1/L2 jog the claw pivot. setOutput() bypasses the PID and stops any
-    // active hold itself, so jogging can't fight the hold task. The bool only
-    // tracks the release edge -- calling holdActively() every idle tick would
-    // tear down and restart its background task 50 times a second for nothing.
-    if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
-      clawRotationLift.setOutput(CLAW_ROT_JOG_POWER);
-      clawRotJogging = true;
-    } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
-      clawRotationLift.setOutput(-CLAW_ROT_JOG_POWER);
-      clawRotJogging = true;
-    } else if (clawRotJogging) {
-      clawRotationLift.holdActively();
-      clawRotJogging = false;
+    // Claw pivot. Only rising edges count, so holding a button does not re-issue
+    // the move -- one press, one command.
+    const bool l1 = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1);
+    const bool l2 = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2);
+    const std::uint32_t nowMs = pros::millis();
+
+    if (l1 && !prevL1) {
+      l1Pending = true;
+      l1PressedAt = nowMs;
+    }
+    if (l2 && !prevL2) {
+      l2Pending = true;
+      l2PressedAt = nowMs;
+    }
+    prevL1 = l1;
+    prevL2 = l2;
+
+    if (l1Pending && l2Pending) {
+      // Both are still pending, which can only happen inside the window: a lone
+      // press is cleared the moment it expires, so it can never pair with one
+      // that arrives later.
+      clawRotationLift.moveTo(CLAW_MATCHLOAD_DEG);
+      l1Pending = false;
+      l2Pending = false;
+    } else if (l1Pending && nowMs - l1PressedAt >= CLAW_CHORD_WINDOW_MS) {
+      clawRotationLift.moveTo(CLAW_PARALLEL_DEG);
+      l1Pending = false;
+    } else if (l2Pending && nowMs - l2PressedAt >= CLAW_CHORD_WINDOW_MS) {
+      clawRotationLift.moveTo(CLAW_PERPENDICULAR_DEG);
+      l2Pending = false;
     }
 
-    // fieldCentric = true: "forward" always means the direction the bot faced
-    // when opcontrol() started (heading 0, from setPose above), whatever way
-    // the bot is currently pointing.
+    // fieldCentric = false: robot-centric driving. "Forward" is whichever way
+    // the bot is currently pointing, so the joystick vector is used as-is
+    // instead of being rotated by the heading odom reports.
     chassis.driveControl(
         forward, sideways, rotation,
-        {.movement = movement_curve, .rotation = rotation_curve}, true, 90,
+        {.movement = movement_curve, .rotation = rotation_curve}, false, 90,
         {.correctionOn = false, .kP = 0.15f, .kI = 0.01f, .kD = 0.01f});
     pros::delay(20);
   }
