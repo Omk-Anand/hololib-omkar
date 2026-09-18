@@ -71,7 +71,6 @@ pros::Motor backRight = pros::Motor(backRPort, pros::MotorGear::blue);
 pros::Imu imu = pros::Imu(imuPort);
 // pros::AIVision visionSensor = pros::AIVision(visionPort);
 
-pros::MotorGroup liftMotors = pros::MotorGroup({6, -7});
 pros::Motor clawGripper = pros::Motor(10, pros::MotorGear::green); // open/close rollers
 
 pros::Motor intake = pros::Motor(8, pros::MotorGear::blue);
@@ -140,7 +139,16 @@ void initialize() {
     liftLift.initialize();
     clawRotationLift.setFeedforward(liftlib::Feedforward::cosine(/*kG=*/0.0f, /*horizontal=*/0.0f, /*degreesPerUnit=*/1.0f));
 
-    //liftLift.setFeedforward(liftlib::Feedforward::constant(/*kG=*/18.5f));
+    // Required for the R1/R2 lock in opcontrol: holdActively() early-returns to
+    // brake() whenever the feedforward is disabled (isEnabled() is
+    // `model != None && kG != 0`), so with this commented out the lift only
+    // brakes instead of actively holding.
+    //
+    // Constant, not cosine -- a cascade's load does not change with height. kG is
+    // in liftlib's -127..127 output units and is NOT measured: it came from
+    // converting ModularLift's old millivolt feedforward. Tune it by watching
+    // whether the lift holds height, sags, or climbs when you let go of R1/R2.
+    liftLift.setFeedforward(liftlib::Feedforward::constant(/*kG=*/18.5f));
 
     // Set PID gains for chassis
     xSched.setGains({
@@ -227,6 +235,27 @@ void opcontrol() {
   int prev_sideways = 0;
   int prev_rotation = 0;
 
+  // --- drive direction toggle (UP) ----------------------------------------
+  // Swaps which end of the bot counts as the front, so the driver can lead with
+  // either end without turning around. Each press flips it.
+  //
+  // Flipping the front is a 180 degree rotation of the robot frame, which for a
+  // holonomic drive is just negating both translation axes -- forward becomes
+  // backward and left becomes right together. Negating only one would mirror the
+  // bot instead of turning it, and strafing would end up backwards.
+  //
+  // Rotation is deliberately NOT negated: a clockwise spin is clockwise no
+  // matter which end you call the front, because the bot turns about its centre.
+  // Flipping it too would make the right stick fight the driver.
+  //
+  // This is purely a driver-control convenience. Odometry, heading and every
+  // autonomous motion still use the real, unflipped front of the robot.
+  bool reverseFront = false;
+  bool prevUp = false;
+
+  constexpr float LIFT_JOG_POWER = 127.0f; // liftlib full scale, == 12000 mV
+  bool liftJogging = false;
+
   constexpr float CLAW_PERPENDICULAR_DEG = -40.0f;
   constexpr float CLAW_PARALLEL_DEG = 50.0f;
   constexpr float CLAW_MATCHLOAD_DEG = 60.0f;
@@ -253,19 +282,29 @@ void opcontrol() {
       prev_rotation = rotation;
     }
 
-    liftMotors.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
     clawGripper.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 
     // R1/R2 jog the elevator open loop. liftLift (the PID subsystem on the same
     // motors) is only used by moveTo() in autonomous, so the two never fight.
+    // R1/R2 jog the lift, and releasing both locks it where it is.
+    //
+    // Driven through liftLift rather than the raw motor group so the two cannot
+    // fight over ports 6/-7: setOutput() bypasses the PID for a straight jog and
+    // stops any running hold task itself, and holdActively() then starts a hold
+    // at the current height. The bool tracks the release edge so the hold task
+    // is started once instead of being torn down and rebuilt every idle tick.
+    //
+    // LIFT_JOG_POWER is liftlib's full scale (VOLTAGE_OUTPUT_LIMIT = 127), which
+    // maps to the same 12000 mV the raw move_voltage call used before.
     if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
-      std::cout << "Lift up" << std::endl;
-      liftMotors.move_voltage(12000);
+      liftLift.setOutput(LIFT_JOG_POWER);
+      liftJogging = true;
     } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
-      std::cout << "Lift down" << std::endl;
-      liftMotors.move_voltage(-12000);
-    } else {
-      liftMotors.move_voltage(0);
+      liftLift.setOutput(-LIFT_JOG_POWER);
+      liftJogging = true;
+    } else if (liftJogging) {
+      liftLift.holdActively();
+      liftJogging = false;
     }
 
     // B and Y drive the intake rollers and the claw gripper together, one
@@ -314,8 +353,23 @@ void opcontrol() {
     }
 
 
+    // Rising edge only, so holding UP does not flip every tick.
+    const bool up = controller.get_digital(pros::E_CONTROLLER_DIGITAL_UP);
+    if (up && !prevUp) {
+      reverseFront = !reverseFront;
+      // One short buzz so the driver knows which way the bot is pointing
+      // without looking at the brain.
+      controller.rumble(".");
+    }
+    prevUp = up;
+
+    const int driveForward = reverseFront ? -forward : forward;
+    const int driveSideways = reverseFront ? -sideways : sideways;
+
+    // fieldCentric = false: robot-centric driving. "Forward" is whichever end
+    // the toggle above currently calls the front.
     chassis.driveControl(
-        forward, sideways, rotation,
+        driveForward, driveSideways, rotation,
         {.movement = movement_curve, .rotation = rotation_curve}, false, 90,
         {.correctionOn = false, .kP = 0.15f, .kI = 0.01f, .kD = 0.01f});
     pros::delay(20);
