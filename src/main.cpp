@@ -218,7 +218,8 @@ void simulation() {}
 
 
 void autonomous() {
-  liftLift.moveTo(6.0f);
+
+  chassisAsync(hololib::turnToHeading(45));
 
 }
 
