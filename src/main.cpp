@@ -76,6 +76,11 @@ pros::Motor clawGripper = pros::Motor(10, pros::MotorGear::green); // open/close
 pros::Motor intake = pros::Motor(8, pros::MotorGear::blue);
 
 
+// Read-only handle on the claw pivot motor, used only for get_current_draw()
+// during homing. liftlib owns commanding port 9 through clawRotationLift; this
+// never writes to it.
+pros::Motor clawRotationMotor(9, pros::MotorGear::green);
+
 liftlib::PID clawRotationPID(/*kP=*/5.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/2.0f);
 liftlib::Subsystem clawRotationLift(
     {liftlib::MotorConfig{.port = -9,
@@ -256,9 +261,76 @@ void opcontrol() {
   constexpr float LIFT_JOG_POWER = 127.0f; // liftlib full scale, == 12000 mV
   bool liftJogging = false;
 
-  constexpr float CLAW_PERPENDICULAR_DEG = -40.0f;
-  constexpr float CLAW_PARALLEL_DEG = 50.0f;
-  constexpr float CLAW_MATCHLOAD_DEG = 60.0f;
+  // --- claw pivot positions ------------------------------------------------
+  // The claw has no absolute reference at boot -- initialize() tares wherever it
+  // happens to be resting -- so the first L2 press establishes one. Until that
+  // happens both buttons move by a fixed amount RELATIVE to the current
+  // position; afterwards they move to ABSOLUTE angles measured from that zero.
+  //
+  //   before zeroing   L2 -> current - 32   (from rest, down to perpendicular)
+  //                     or current - 82   (if L1 was pressed first, so the claw
+  //                                        is up at parallel), then tare
+  //                    L1 -> current + 50   (up to parallel)
+  //   after zeroing    L2 -> 0              (perpendicular, re-tares every time)
+  //                    L1 -> 90             (parallel)
+  //                    L1+L2 -> 100         (matchload)
+  //
+  // The relative steps now agree with each other: 32 + 50 = 82, which is the
+  // CLAW_FIRST_L2_STEP_FROM_L1_DEG drop back down from parallel.
+  //
+  // ⚠️ But they disagree with CLAW_PARALLEL_DEG. The steps put parallel 82
+  // degrees above perpendicular; the constant says 90. So the first L1 press
+  // (relative, +50 from rest) and every L1 press after zeroing (absolute, 90)
+  // land 8 degrees apart. If 82 is the measured span, set CLAW_PARALLEL_DEG to
+  // 82 -- and CLAW_MATCHLOAD_DEG, which was parallel + 10, to 92.
+  constexpr float CLAW_PERPENDICULAR_DEG = 0.0f;
+  constexpr float CLAW_PARALLEL_DEG = 90.0f;
+
+  // L1 before the claw has been zeroed: there is no absolute frame yet, so it
+  // steps this far up from wherever the claw is resting.
+  constexpr float CLAW_FIRST_L1_STEP_DEG = 50.0f;
+  constexpr float CLAW_MATCHLOAD_DEG = 100.0f;
+  // --- homing --------------------------------------------------------------
+  // L2 does not aim at an angle. It drives the claw down at a gentle constant
+  // output until it runs into the bottom stop, then tares there -- so 0 is always
+  // the real end of travel, which no measured constant can drift away from.
+  // L1 aims at an angle instead; only L2 homes.
+  //
+  // Contact is detected two ways, whichever trips first:
+  //   current  -- pushing against a stop draws far more than free movement, and
+  //               this reacts before the claw has fully stopped, so it presses
+  //               into the stop more gently.
+  //   position -- has not moved more than the epsilon for several ticks. Catches
+  //               a soft jam that never spikes the current.
+  //
+  // The grace period covers motor inrush and the fact that the claw has not
+  // started moving yet in the first few ticks -- both look exactly like contact.
+  // The timeout is a backstop so a press can never drive indefinitely.
+  constexpr float CLAW_HOMING_POWER = 40.0f; // -127..127, gentle on purpose
+  constexpr std::int32_t CLAW_HOMING_CURRENT_MA = 1200;
+  constexpr std::uint32_t CLAW_HOMING_GRACE_MS = 250;
+  constexpr std::uint32_t CLAW_HOMING_TIMEOUT_MS = 3000;
+  constexpr float CLAW_STALL_EPSILON_DEG = 0.3f;
+  constexpr int CLAW_STALL_TICKS = 10; // 10 * 20ms loop = 200ms of no movement
+
+  // Set once L2 has homed and tared, which is what makes the absolute angles
+  // (matchload) mean anything.
+  bool clawZeroed = false;
+
+  // Manual claw jog: RIGHT drives up, DOWN drives down, both open loop so the
+  // driver can eyeball an angle instead of trusting a number the encoder may no
+  // longer agree with. Jogging down auto-tares when it reaches the bottom stop,
+  // the same contact test L2 homing uses -- so a manual trip to the bottom
+  // re-references the claw for free.
+  constexpr float CLAW_MANUAL_POWER = 127.0f * 0.6f; // 60%
+  bool clawManualJogging = false;
+  bool clawManualTared = false; // one tare per press, not once per tick
+
+  // 0 = not homing, -1 = homing down (L2), +1 = homing up (L1)
+  int clawHomingDir = 0;
+  std::uint32_t clawHomingStartedAt = 0;
+  int clawStallTicks = 0;
+  float clawLastPosition = 0.0f;
 
   constexpr std::uint32_t CLAW_CHORD_WINDOW_MS = 100;
 
@@ -296,32 +368,43 @@ void opcontrol() {
     //
     // LIFT_JOG_POWER is liftlib's full scale (VOLTAGE_OUTPUT_LIMIT = 127), which
     // maps to the same 12000 mV the raw move_voltage call used before.
-    if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
-      liftLift.setOutput(LIFT_JOG_POWER);
-      liftJogging = true;
-    } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
-      liftLift.setOutput(-LIFT_JOG_POWER);
+    const bool r1 = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1);
+    const bool r2 = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2);
+
+    if (r1 || r2) {
+      liftLift.setOutput(r1 ? LIFT_JOG_POWER : -LIFT_JOG_POWER);
       liftJogging = true;
     } else if (liftJogging) {
       liftLift.holdActively();
       liftJogging = false;
     }
 
-    // B and Y drive the intake rollers and the claw gripper together, one
-    // button per direction. This replaces the old DOWN/RIGHT intake-only
-    // bindings -- they're folded in here, so DOWN and RIGHT are now free.
-    if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_B)) {
-      std::cout << "Intake in / claw in" << std::endl;
-      intake.move_voltage(-6000);
+
+    // B and Y drive the intake rollers and the claw gripper together, one button
+    // per direction. LEFT outtakes the intake on its own, without touching the
+    // gripper -- so the two are driven by separate if-chains below rather than
+    // one shared block, otherwise LEFT's branch would have to repeat the
+    // gripper's state and it would be easy to get them out of step.
+    const bool intakeIn = controller.get_digital(pros::E_CONTROLLER_DIGITAL_B);
+    const bool intakeOut = controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y);
+    const bool outtakeOnly = controller.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT);
+
+    // Gripper: B and Y only. LEFT is deliberately absent here.
+    if (intakeIn) {
       clawGripper.move_voltage(6000);
-    } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y)) {
-      std::cout << "Intake out / claw out" << std::endl;
-      intake.move_voltage(12000);
+    } else if (intakeOut) {
       clawGripper.move_voltage(-12000);
     } else {
-
-      intake.move_voltage(0);
       clawGripper.move_voltage(0);
+    }
+
+    // Intake: same two buttons, plus LEFT for the outtake direction alone.
+    if (intakeIn) {
+      intake.move_voltage(-6000);
+    } else if (intakeOut || outtakeOnly) {
+      intake.move_voltage(12000);
+    } else {
+      intake.move_voltage(0);
     }
 
     // Claw pivot. Only rising edges count, so holding a button does not re-issue
@@ -342,15 +425,114 @@ void opcontrol() {
     prevL2 = l2;
 
     if (l1Pending && l2Pending) {
+      // Matchload is an absolute angle, so it only means anything once L2 has
+      // homed and established the zero.
+      clawRotationLift.stop();
+      clawHomingDir = 0;
       clawRotationLift.moveTo(CLAW_MATCHLOAD_DEG);
       l1Pending = false;
       l2Pending = false;
     } else if (l1Pending && nowMs - l1PressedAt >= CLAW_CHORD_WINDOW_MS) {
-      clawRotationLift.moveTo(CLAW_PARALLEL_DEG);
+      // L1 aims at an angle -- it does not home. Once L2 has zeroed the claw
+      // that angle is absolute; before then there is no frame to measure from,
+      // so it steps up relative to wherever the claw is resting.
+      clawRotationLift.stop(); // cancel a homing run still in progress
+      clawHomingDir = 0;
+      clawRotationLift.moveTo(clawZeroed
+                                  ? CLAW_PARALLEL_DEG
+                                  : clawRotationLift.getPosition() + CLAW_FIRST_L1_STEP_DEG);
       l1Pending = false;
     } else if (l2Pending && nowMs - l2PressedAt >= CLAW_CHORD_WINDOW_MS) {
-      clawRotationLift.moveTo(CLAW_PERPENDICULAR_DEG);
+      clawRotationLift.stop();
+      clawHomingDir = -1;
+      clawHomingStartedAt = nowMs;
+      clawStallTicks = 0;
+      clawLastPosition = clawRotationLift.getPosition();
       l2Pending = false;
+    }
+
+    // Homing runs a tick at a time here rather than in a blocking loop, so the
+    // drivetrain and everything else keep responding while the claw seeks.
+    if (clawHomingDir != 0) {
+      clawRotationLift.setOutput(clawHomingDir > 0 ? CLAW_HOMING_POWER : -CLAW_HOMING_POWER);
+
+      const float clawPosition = clawRotationLift.getPosition();
+      const std::uint32_t clawElapsed = nowMs - clawHomingStartedAt;
+      bool contact = false;
+
+      if (clawElapsed >= CLAW_HOMING_GRACE_MS) {
+        const bool overCurrent = clawRotationMotor.get_current_draw() >= CLAW_HOMING_CURRENT_MA;
+        const bool notMoving = std::abs(clawPosition - clawLastPosition) < CLAW_STALL_EPSILON_DEG;
+        if (overCurrent || notMoving) {
+          clawStallTicks++;
+        } else {
+          clawStallTicks = 0;
+        }
+        contact = clawStallTicks >= CLAW_STALL_TICKS || clawElapsed >= CLAW_HOMING_TIMEOUT_MS;
+      }
+      clawLastPosition = clawPosition;
+
+      if (contact) {
+        // setOutput(0) first so the claw stops pressing into the stop before
+        // anything else happens. Taring under a live output would tare against a
+        // position still being driven.
+        clawRotationLift.setOutput(0);
+        if (clawHomingDir < 0) {
+          clawRotationLift.initialize(); // bottom stop becomes 0
+          clawZeroed = true;
+        }
+        clawRotationLift.holdActively();
+        clawHomingDir = 0;
+        clawStallTicks = 0;
+      }
+    }
+
+    // Manual claw jog. Takes priority over anything else driving the claw:
+    // stop() cancels a homing run or an L1 move, because setOutput() on its own
+    // would leave those tasks writing to the same motor.
+    const bool clawJogUp = controller.get_digital(pros::E_CONTROLLER_DIGITAL_RIGHT);
+    const bool clawJogDown = controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN);
+
+    if (clawJogUp || clawJogDown) {
+      if (!clawManualJogging) {
+        clawRotationLift.stop();
+        clawHomingDir = 0;
+        clawStallTicks = 0;
+        clawManualTared = false;
+        clawLastPosition = clawRotationLift.getPosition();
+        clawHomingStartedAt = nowMs;
+      }
+      clawRotationLift.setOutput(clawJogUp ? CLAW_MANUAL_POWER : -CLAW_MANUAL_POWER);
+      clawManualJogging = true;
+
+      // Jogging down into the bottom stop re-zeros the claw, so the driver can
+      // recover a slipped reference without using L2. Only downward: the top
+      // stop is not the zero. Taring up would be actively wrong.
+      if (clawJogDown && !clawManualTared) {
+        const float clawPosition = clawRotationLift.getPosition();
+        if (nowMs - clawHomingStartedAt >= CLAW_HOMING_GRACE_MS) {
+          const bool overCurrent =
+              clawRotationMotor.get_current_draw() >= CLAW_HOMING_CURRENT_MA;
+          const bool notMoving =
+              std::abs(clawPosition - clawLastPosition) < CLAW_STALL_EPSILON_DEG;
+          if (overCurrent || notMoving) {
+            clawStallTicks++;
+          } else {
+            clawStallTicks = 0;
+          }
+          if (clawStallTicks >= CLAW_STALL_TICKS) {
+            clawRotationLift.setOutput(0); // stop pressing into the stop
+            clawRotationLift.initialize(); // bottom stop becomes 0
+            clawZeroed = true;
+            clawManualTared = true;
+            clawStallTicks = 0;
+          }
+        }
+        clawLastPosition = clawPosition;
+      }
+    } else if (clawManualJogging) {
+      clawRotationLift.holdActively();
+      clawManualJogging = false;
     }
 
 

@@ -74,7 +74,7 @@ void moveToPoint(float tx, float ty, MoveParams params, MoveSettings settings) {
             outT = 0.0f;
         outT = std::clamp(outT, -params.maxRotationSpeed, params.maxRotationSpeed);
 
-        settings.chassis.drive(outX_global, outY_global, outT, curr.theta);
+        settings.chassis.drivePower(outX_global, outY_global, outT, curr.theta);
     }
     settings.chassis.brake();
 }

@@ -20,15 +20,25 @@ struct MoveParams {
     uint32_t timeout = 5000;            /**< Maximum time allowed for movement (ms) */
 }; 
 struct MoveSettings {
-    pros::Motor& frontLeft = frontLeft;
-    pros::Motor& frontRight = frontRight;
-    pros::Motor& backLeft = backLeft;
-    pros::Motor& backRight = backRight;
+    // Every default below MUST be qualified with `::`. In a default member
+    // initializer, name lookup searches class scope first, so an unqualified
+    // `chassis` resolves to MoveSettings::chassis -- the member being declared --
+    // and binds the reference to itself rather than to the global. That is
+    // undefined behaviour, it compiles without a warning, and it only shows up at
+    // runtime as a data abort the first time a motion calls through it.
+    pros::Motor& frontLeft = ::frontLeft;
+    pros::Motor& frontRight = ::frontRight;
+    pros::Motor& backLeft = ::backLeft;
+    pros::Motor& backRight = ::backRight;
 
-    Chassis& chassis = chassis;
-    EncoderEKFOdometry& odom = odom;
-    GainScheduler& xSched = xSched, ySched = ySched, thetaSched = thetaSched;
-    ObstacleManager& obstacles = obstacles;
+    Chassis& chassis = ::chassis;
+    EncoderEKFOdometry& odom = ::odom;
+    // One reference per line: in a comma-separated declaration each name needs
+    // its own `::`, which is easy to miss.
+    GainScheduler& xSched = ::xSched;
+    GainScheduler& ySched = ::ySched;
+    GainScheduler& thetaSched = ::thetaSched;
+    ObstacleManager& obstacles = ::obstacles;
 
     std::function<hololib::Pose(bool)> poseGetter = ::poseGetter;
 };

@@ -43,7 +43,7 @@ void turnToPoint(float tx, float ty, MoveParams params, MoveSettings settings) {
             output = std::copysign(params.minSpeed, output);
         output = std::clamp(output, -params.maxRotationSpeed, params.maxRotationSpeed);
 
-        settings.chassis.drive(0.0f, 0.0f, output, curr.theta);
+        settings.chassis.drivePower(0.0f, 0.0f, output, curr.theta);
         prevError = error;
     }
 

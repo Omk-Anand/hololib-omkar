@@ -48,7 +48,7 @@ void swingTurn(float targetThetaDeg, SwingSide lockedSide, MoveParams params, Mo
         float outX_global = outX_local * cosH + outY_local * sinH;
         float outY_global = -outX_local * sinH + outY_local * cosH;
 
-        settings.chassis.drive(outX_global, outY_global, outT, curr.theta);
+        settings.chassis.drivePower(outX_global, outY_global, outT, curr.theta);
     }
 
     settings.chassis.brake();

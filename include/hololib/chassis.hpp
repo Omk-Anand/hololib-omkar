@@ -52,7 +52,29 @@ public:
     };
     void calibrate();
 
+    /**
+     * @brief Drive the chassis, in MILLIVOLTS.
+     *
+     * vx, vy and omega are passed almost straight through to move_voltage(),
+     * clamped to the motors' +/-12000 mV range. Driver control reaches this
+     * through driveControl(), whose applyCurve() has already scaled the
+     * joystick by JOYSTICK_SCALING_FACTOR.
+     *
+     * @warning Motion functions work in drive-power units (-127..127), not
+     * millivolts. They must call drivePower() instead -- handing 127 to this
+     * function asks for 127 mV, about 1% of full power.
+     */
     void drive(float vx, float vy, float omega, float theta);
+
+    /**
+     * @brief Drive the chassis, in DRIVE-POWER units (-127..127).
+     *
+     * The same scale as the joystick and as MoveParams::maxTranslationSpeed and
+     * MoveParams::maxRotationSpeed, so a motion function's PID output can be
+     * passed directly. Scales by JOYSTICK_SCALING_FACTOR and forwards to
+     * drive(), which applies the final +/-12000 mV clamp.
+     */
+    void drivePower(float vx, float vy, float omega, float theta);
 
     void driveControl(float forward,
                       float sideways,

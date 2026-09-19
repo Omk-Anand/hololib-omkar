@@ -57,6 +57,17 @@ void Chassis::brake() {
     backRight.brake();
 }
 
+void Chassis::drivePower(float vx, float vy, float omega, float theta) {
+    // Motion functions bound their PID output with MoveParams::maxTranslationSpeed
+    // and maxRotationSpeed, both -127..127 by default -- the joystick's scale, not
+    // millivolts. Convert with the same factor driveControl()'s applyCurve() uses,
+    // so 127 here means full power exactly as 127 on the stick does.
+    drive(vx * JOYSTICK_SCALING_FACTOR,
+          vy * JOYSTICK_SCALING_FACTOR,
+          omega * JOYSTICK_SCALING_FACTOR,
+          theta);
+}
+
 void Chassis::driveControl(float forward,
                            float sideways,
                            float rotation,

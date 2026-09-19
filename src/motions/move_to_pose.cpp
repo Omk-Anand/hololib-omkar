@@ -58,7 +58,7 @@ void moveToPose(float tx, float ty, float targetThetaDeg, MoveParams params, Mov
         }
         outT = std::clamp(outT, -params.maxRotationSpeed, params.maxRotationSpeed);
 
-        settings.chassis.drive(outX_g, outY_g, outT, curr.theta);
+        settings.chassis.drivePower(outX_g, outY_g, outT, curr.theta);
     }
 
     settings.chassis.brake();
