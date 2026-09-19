@@ -84,7 +84,7 @@ liftlib::Subsystem clawRotationLift(
                           .gearset = pros::MotorGears::green}},
     clawRotationPID);
 
-constexpr float LIFT_SPOOL_RADIUS_IN = 0.28f;  // measured
+constexpr float LIFT_SPOOL_RADIUS_IN = 0.26f;  // measured
 constexpr float LIFT_GEAR_RATIO = 1.0f;       // direct drive, no external reduction
 constexpr float LIFT_INCHES_PER_MOTOR_DEGREE =
     LIFT_GEAR_RATIO * (M_PI / 180.0f) * LIFT_SPOOL_RADIUS_IN;
@@ -98,7 +98,7 @@ liftlib::Subsystem liftLift(
                           .brakeType = pros::E_MOTOR_BRAKE_HOLD,
                           .gearset = pros::MotorGears::blue}},
     std::vector<liftlib::Subsystem::GainPoint>{
-        {liftlib::PID(/*kP=*/22.0f, /*kI=*/0.0f, /*kD=*/1.0f, /*threshold=*/1.0f), /*position_in=*/12.0f},
+        {liftlib::PID(/*kP=*/28.0f, /*kI=*/0.0f, /*kD=*/1.0f, /*threshold=*/1.0f), /*position_in=*/12.0f},
         {liftlib::PID(/*kP=*/20.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/24.0f},
         {liftlib::PID(/*kP=*/0.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/36.0f},
     });
@@ -218,7 +218,7 @@ void simulation() {}
 
 
 void autonomous() {
-  chassisAsync(hololib::turnToHeading(45));
+  liftLift.moveTo(6.0f);
 
 }
 
@@ -312,13 +312,14 @@ void opcontrol() {
     // bindings -- they're folded in here, so DOWN and RIGHT are now free.
     if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_B)) {
       std::cout << "Intake in / claw in" << std::endl;
-      intake.move_voltage(-12000);
-      clawGripper.move_voltage(12000);
+      intake.move_voltage(-6000);
+      clawGripper.move_voltage(6000);
     } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y)) {
       std::cout << "Intake out / claw out" << std::endl;
       intake.move_voltage(12000);
       clawGripper.move_voltage(-12000);
     } else {
+
       intake.move_voltage(0);
       clawGripper.move_voltage(0);
     }
