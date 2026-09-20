@@ -523,6 +523,8 @@ private:
   uint32_t last_collision_check_time = 0;
   uint32_t stall_accumulator_ms = 0;
 
+  float scaleThetaOutput(float output) const;
+
   std::vector<TrackingWheelConfig> trackingWheelConfigs;
   std::vector<pros::Rotation> trackingWheelSensors;
   std::vector<float> prevTrackingPositions;

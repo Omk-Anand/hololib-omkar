@@ -100,10 +100,9 @@ Chassis chassis(frontl,
                  .wheelDiameter = 3.25,     // wheel diameter in inches (should
                                             // be tuned to EFFECTIVE wheel
                                             // diameter)
-                 .gearRatio = 0.5,          // gear ratio of the drivetrain
-                 .kfEnabled = true});       // Enables ekf, only use if you know
-                                            // how to tune the process and
-                                            // measurement noise.
+                 .gearRatio = 0.5,   // gear ratio of the drivetrain
+                 .kfEnabled = false, // keep EKF off until its noise values are tuned
+                 .thetaOutputScale = -1.0f}); // flip PID turn output
 
 void initialize() {
     pros::lcd::initialize();
@@ -114,18 +113,20 @@ void initialize() {
 
     // Set PID gains for chassis
     chassis.setXGains({
-        {36.0, {15, 0, 2.4}},
-        {0.0,  {25, 0, 0.5}},
+        {36.0, {5.5, 0, 0.55}},
+        {12.0, {6.5, 0, 0.75}},
+        {0.0,  {7.5, 0, 0.85}},
     });
     chassis.setYGains({
-        {36.0, {15, 0, 1.6}},
-        {0.0,  {20, 0, 1.5}},
+        {36.0, {6.0, 0, 0.60}},
+        {12.0, {7.0, 0, 0.80}},
+        {0.0,  {8.0, 0, 0.90}},
     });
     chassis.setThetaGains({
-        {180.0, {3, 0, 0}   },
-        {90.0,  {3, 0, 0}   },
-        {45.0,  {3, 0, 0}   },
-        {0,     {3, 0, 0.04}},
+        {180.0, {2.00, 0, 0.04, 10, 900}},
+        {90.0,  {1.85, 0, 0.04, 10, 850}},
+        {45.0,  {1.70, 0, 0.035, 10, 800}},
+        {0.0,   {1.15, 0, 0.025, 8, 650}},
     });
 
     // Basically allows you to see the velocity of the chassis (in/s) (helpful for
@@ -160,10 +161,42 @@ void simulation() {}
 
 void autonomous() {
     chassis.setPose(0, 0, 0);
-    chassis.setEKFstate(false);
-    chassis.turnToHeading(90, {.earlyExitRange = 2.5, .async = false});
-    
+    chassis.setEKFstate(false); // keep EKF off until its noise values are tuned
 
+    MoveParams driveParams{
+        .maxTranslationSpeed = 100.0f,
+        .maxRotationSpeed = 90.0f,
+        .minSpeed = 18.0f,
+        .exitRange = 1.5f,
+        .earlyExitRange = 1.5f,
+        .timeout = 1800,
+        .async = false,
+    };
+    MoveParams turnParams{
+        .maxRotationSpeed = 100.0f,
+        .minSpeed = 24.0f,
+        .exitRange = 2.5f,
+        .earlyExitRange = 2.5f,
+        .timeout = 1300,
+        .async = false,
+    };
+
+    intake.move_voltage(-12000);
+    pros::delay(700);
+    intake.brake();
+    pros::delay(200);
+    chassis.moveToPoint(0, 5, driveParams);
+    chassis.turnToHeading(60, turnParams);
+    clawGripper.move_voltage(-12000);
+    chassis.moveToPoint(11, 9, driveParams);
+    clawRotationLift.moveTo(110);
+    liftLift.moveTo(4);
+    chassis.moveToPose(20, 13, 75, driveParams);
+    clawGripper.move_voltage(0);
+    clawGripper.move_voltage(12000);
+    pros::delay(500);
+    liftLift.moveTo(7);
+    chassis.moveToPose(5, 5, 75, driveParams);
 }
 
 void testFunction() { std::cout << "Function called" << std::endl; }
@@ -409,7 +442,7 @@ void opcontrol() {
 
         // fieldCentric = false: robot-centric driving. "Forward" is whichever end
         // the toggle above currently calls the front.
-        chassis.driveControl(driveForward, driveSideways, rotation,
+        chassis.driveControl(driveForward, driveSideways, -rotation,
                              {.movement = movement_curve, .rotation = rotation_curve}, false, 90,
                              {.correctionOn = false, .kP = 0.15f, .kI = 0.01f, .kD = 0.01f});
         pros::delay(20);

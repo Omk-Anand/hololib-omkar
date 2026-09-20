@@ -202,10 +202,14 @@ void Chassis::followPath(const std::vector<PathPoint> &path,
           bool settledAngle = std::abs(angleError) < 2.0f;
 
           if (settledPos && settledAngle) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
+              brake();
+            }
             if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             if (distToEnd > params.exitRange * 1.5f ||
                 std::abs(angleError) > 4.0f)
@@ -218,7 +222,8 @@ void Chassis::followPath(const std::vector<PathPoint> &path,
 
           float forward = static_cast<float>(forwardPID.update(localForward));
           float strafe = static_cast<float>(strafePID.update(localStrafe));
-          float turn = static_cast<float>(thetaPID.update(angleError));
+          float turn =
+              scaleThetaOutput(static_cast<float>(thetaPID.update(angleError)));
 
           float translationalMag = std::hypot(forward, strafe);
 
@@ -269,28 +274,31 @@ void Chassis::turnToHeading(float targetDeg, MoveParams params) {
         constexpr uint32_t settleTime = 100;
 
         PID tPID(0, 0, 0, 0);
-        float prevError = 0.0f;
 
         while (pros::millis() - start < params.timeout) {
           float error = getAngleError(targetDeg, getPose(false).theta);
 
           if (params.earlyExitRange > 0.0f &&
-              std::abs(error) <= params.earlyExitRange)
+              std::abs(error) <= params.earlyExitRange) {
+            brake();
             return;
+          }
 
           if (std::abs(error) < params.exitRange) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
-            float vel = (error - prevError) / 0.01f;
-            if (pros::millis() - settleStart >= settleTime &&
-                std::abs(vel) < 0.5f)
+              brake();
+            }
+            if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
 
           tPID.setGains(thetaSched.getGains(error));
-          float output = (float)tPID.update(error);
+          float output = scaleThetaOutput((float)tPID.update(error));
 
           if (std::abs(output) > 1e-3f && std::abs(output) < params.minSpeed &&
               std::abs(error) > params.exitRange)
@@ -299,7 +307,6 @@ void Chassis::turnToHeading(float targetDeg, MoveParams params) {
                               params.maxRotationSpeed);
 
           setMotorVoltages(calculateHolonomic(0, 0, output));
-          prevError = error;
           pros::delay(10);
         }
         brake();
@@ -322,7 +329,6 @@ void Chassis::turnToPoint(float tx, float ty, MoveParams params) {
         constexpr uint32_t settleTime = 100;
 
         PID tPID(0, 0, 0, 0);
-        float prevError = 0.0f;
 
         while (pros::millis() - start < params.timeout) {
           Pose p = getPose(false);
@@ -332,22 +338,26 @@ void Chassis::turnToPoint(float tx, float ty, MoveParams params) {
           float error = getAngleError(targetDeg, p.theta);
 
           if (params.earlyExitRange > 0.0f &&
-              std::abs(error) <= params.earlyExitRange)
+              std::abs(error) <= params.earlyExitRange) {
+            brake();
             return;
+          }
 
           if (std::abs(error) < params.exitRange) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
-            float vel = (error - prevError) / 0.01f;
-            if (pros::millis() - settleStart >= settleTime &&
-                std::abs(vel) < 0.5f)
+              brake();
+            }
+            if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
 
           tPID.setGains(thetaSched.getGains(error));
-          float output = (float)tPID.update(error);
+          float output = scaleThetaOutput((float)tPID.update(error));
 
           if (std::abs(output) > 1e-3f && std::abs(output) < params.minSpeed &&
               std::abs(error) > params.exitRange)
@@ -356,7 +366,6 @@ void Chassis::turnToPoint(float tx, float ty, MoveParams params) {
                               params.maxRotationSpeed);
 
           setMotorVoltages(calculateHolonomic(0, 0, output));
-          prevError = error;
           pros::delay(10);
         }
         brake();
@@ -388,14 +397,20 @@ void Chassis::moveToPoint(float tx, float ty, MoveParams params,
 
           float distErr = std::hypot(tx - curr.x, ty - curr.y);
 
-          if (params.earlyExitRange > 0.0f && distErr <= params.earlyExitRange)
+          if (params.earlyExitRange > 0.0f && distErr <= params.earlyExitRange) {
+            brake();
             return;
+          }
 
           if (distErr < params.exitRange) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
+              brake();
+            }
             if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
@@ -429,7 +444,9 @@ void Chassis::moveToPoint(float tx, float ty, MoveParams params,
 
           float outX_local = (float)xPID.update(ex_local);
           float outY_local = (float)yPID.update(ey_local);
-          float outT = angleCorrection ? (float)tPID.update(angleError) : 0.0f;
+          float outT = angleCorrection
+                           ? scaleThetaOutput((float)tPID.update(angleError))
+                           : 0.0f;
 
           float mag = std::hypot(outX_local, outY_local);
           if (mag > 1e-3f && mag < params.minSpeed &&
@@ -488,14 +505,20 @@ void Chassis::moveRelative(float forward, float sideways, MoveParams params,
           float distErr = std::hypot(targetX - curr.x, targetY - curr.y);
           float angleError = getAngleError(start.theta, curr.theta);
 
-          if (params.earlyExitRange > 0.0f && distErr <= params.earlyExitRange)
+          if (params.earlyExitRange > 0.0f && distErr <= params.earlyExitRange) {
+            brake();
             return;
+          }
 
           if (distErr < params.exitRange) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
+              brake();
+            }
             if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
@@ -519,7 +542,9 @@ void Chassis::moveRelative(float forward, float sideways, MoveParams params,
 
           float outX_g = (float)xPID.update(ex);
           float outY_g = (float)yPID.update(ey);
-          float outT = holdHeading ? (float)tPID.update(angleError) : 0.0f;
+          float outT = holdHeading
+                           ? scaleThetaOutput((float)tPID.update(angleError))
+                           : 0.0f;
 
           float mag = std::hypot(outX_g, outY_g);
           if (mag > 1e-3f && mag < params.minSpeed &&
@@ -600,16 +625,22 @@ void Chassis::moveToPose(float tx, float ty, float targetThetaDeg,
           float distErr = std::hypot(ex, ey);
           float angleError = getAngleError(targetThetaDeg, curr.theta);
 
-          if (params.earlyExitRange > 0.0f && distErr <= params.earlyExitRange)
+          if (params.earlyExitRange > 0.0f && distErr <= params.earlyExitRange) {
+            brake();
             return;
+          }
 
           bool posSettled = distErr < params.exitRange;
           bool angleSettled = std::abs(angleError) < angleExitDeg;
           if (posSettled && angleSettled) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
+              brake();
+            }
             if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
@@ -620,7 +651,9 @@ void Chassis::moveToPose(float tx, float ty, float targetThetaDeg,
 
           float outX_g = (float)xPID.update(ex);
           float outY_g = (float)yPID.update(ey);
-          float outT = (float)tPID.update(angleError);
+          float outT = angleSettled
+                           ? 0.0f
+                           : scaleThetaOutput((float)tPID.update(angleError));
 
           float mag = std::hypot(outX_g, outY_g);
           if (!posSettled && mag > 1e-3f && mag < params.minSpeed) {
@@ -674,18 +707,28 @@ void Chassis::swingTurn(float targetThetaDeg, SwingSide lockedSide,
           Pose curr = getPose(false);
           float angleError = getAngleError(targetThetaDeg, curr.theta);
 
+          if (params.earlyExitRange > 0.0f &&
+              std::abs(angleError) <= params.earlyExitRange) {
+            brake();
+            return;
+          }
+
           bool angleSettled = std::abs(angleError) < angleExitDeg;
           if (angleSettled) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
+              brake();
+            }
             if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
 
           tPID.setGains(thetaSched.getGains(angleError));
-          float outT = (float)tPID.update(angleError);
+          float outT = scaleThetaOutput((float)tPID.update(angleError));
           if (!angleSettled && std::abs(outT) < params.minSpeed) {
             outT = std::copysign(params.minSpeed, outT);
           }

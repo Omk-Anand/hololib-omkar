@@ -12,6 +12,9 @@ struct ChassisConfig {
   float wheelDiameter;           /**< Diameter of the drive wheels */
   float gearRatio;       /**< Gear ratio (motor rotations / wheel rotations) */
   bool kfEnabled = true; /**< Use Kalman filtering on encoders if true */
+  float thetaOutputScale =
+      1.0f; /**< Scale/sign for PID-generated turn output. Use -1.0 if
+               autonomous turns take the long way around. */
 };
 
 /**

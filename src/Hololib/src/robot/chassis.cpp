@@ -20,6 +20,10 @@ void Chassis::calibrate() {
   backRight.tare_position();
   frontLeft.tare_position();
   frontRight.tare_position();
+  backLeft.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+  backRight.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+  frontLeft.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+  frontRight.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
   motionDistTraveled = 0.0f;
   prev_fl = 0, prev_fr = 0, prev_bl = 0, prev_br = 0;
   prev_heading = 0;
@@ -282,7 +286,7 @@ void Chassis::driveControl(float forward, float sideways, float rotation,
       if (std::abs(angleError) < 0.5f) {
         rotation = 0.0f;
       } else {
-        rotation = (float)headingPID.update(angleError);
+        rotation = scaleThetaOutput((float)headingPID.update(angleError));
         rotation = std::clamp(rotation, -MAX_CORRECTION, MAX_CORRECTION);
       }
     } else {
@@ -460,6 +464,10 @@ float Chassis::radToDeg(float rad) { return rad * RAD2DEG; }
  */
 float Chassis::degToRad(float deg) { return deg * DEG2RAD; }
 
+float Chassis::scaleThetaOutput(float output) const {
+  return output * config.thetaOutputScale;
+}
+
 /**
  *@brief Enables or disables the EKF.
  *@param state Whether to enable the EKF.
@@ -527,16 +535,22 @@ void Chassis::curveCircle(float targetThetaDeg, float radius, MoveParams params,
           float finalDistErr = std::hypot(finalX - curr.x, finalY - curr.y);
 
           if (params.earlyExitRange > 0.0f &&
-              finalDistErr <= params.earlyExitRange)
+              finalDistErr <= params.earlyExitRange) {
+            brake();
             return;
+          }
 
           bool posSettled = finalDistErr < params.exitRange;
           bool angleSettled = std::abs(angleError) < angleExitDeg;
           if (posSettled && angleSettled) {
-            if (settleStart == 0)
+            if (settleStart == 0) {
               settleStart = pros::millis();
+              brake();
+            }
             if (pros::millis() - settleStart >= settleTime)
               break;
+            pros::delay(10);
+            continue;
           } else {
             settleStart = 0;
           }
@@ -559,7 +573,9 @@ void Chassis::curveCircle(float targetThetaDeg, float radius, MoveParams params,
 
           float outX_local = (float)xPID.update(radiusError * centerSide);
           float outY_local = (float)yPID.update(arcRemaining);
-          float outT = (float)tPID.update(angleError);
+          float outT =
+              angleSettled ? 0.0f
+                           : scaleThetaOutput((float)tPID.update(angleError));
 
           float mag = std::hypot(outX_local, outY_local);
           if (!posSettled && mag > 1e-3f && mag < params.minSpeed) {
