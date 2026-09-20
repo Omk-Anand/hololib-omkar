@@ -4,6 +4,28 @@
 
 static constexpr float DEG2RAD = M_PI / 180.0f;
 
+static void integrateDeadReckon(Pose &pose, float dx_local, float dy_local,
+                                float dtheta, float heading) {
+  float s, c;
+  if (std::abs(dtheta) < 1e-4f) {
+    s = 1.0f - (dtheta * dtheta) / 6.0f;
+    c = dtheta / 2.0f;
+  } else {
+    s = std::sin(dtheta) / dtheta;
+    c = (1.0f - std::cos(dtheta)) / dtheta;
+  }
+
+  float arc_x = s * dx_local + c * dy_local;
+  float arc_y = -c * dx_local + s * dy_local;
+
+  float cos_t = std::cos(pose.theta);
+  float sin_t = std::sin(pose.theta);
+
+  pose.x += cos_t * arc_x + sin_t * arc_y;
+  pose.y += -sin_t * arc_x + cos_t * arc_y;
+  pose.theta = std::remainder(heading, 2.0f * static_cast<float>(M_PI));
+}
+
 /**
  *@brief Trampoline function for the odometry task.
  *@param param The chassis to pass to the task.
@@ -169,21 +191,29 @@ void Chassis::odometryTask() {
 
       poseMutex.take();
 
-      ekf.predict(dx_local, dy_local, d_theta_meas);
-
-      ekf.updateTrackingWheels(trackingWheelConfigs, measured_deltas, dx_local,
-                               dy_local, d_theta_meas, trackingWheelMeasNoise);
-
-      float current_w = d_theta_meas / 0.01f;
-      float dynamic_R = measurementNoise + std::abs(current_w) * 0.005f;
-      ekf.updateIMU(current_heading_meas, dynamic_R);
-
       float step_dist = std::sqrt(dx_local * dx_local + dy_local * dy_local);
       motionDistTraveled += step_dist;
 
-      currentPose.x = ekf.getX();
-      currentPose.y = ekf.getY();
-      currentPose.theta = ekf.getTheta();
+      if (config.kfEnabled) {
+        ekf.predict(dx_local, dy_local, d_theta_meas);
+
+        ekf.updateTrackingWheels(trackingWheelConfigs, measured_deltas,
+                                 dx_local, dy_local, d_theta_meas,
+                                 trackingWheelMeasNoise);
+
+        float current_w = d_theta_meas / 0.01f;
+        float dynamic_R = measurementNoise + std::abs(current_w) * 0.005f;
+        ekf.updateIMU(current_heading_meas, dynamic_R);
+
+        currentPose.x = ekf.getX();
+        currentPose.y = ekf.getY();
+        currentPose.theta = ekf.getTheta();
+      } else {
+        integrateDeadReckon(currentPose, dx_local, dy_local, d_theta_meas,
+                            current_heading_meas);
+        ekf.setPose(currentPose.x, currentPose.y, currentPose.theta);
+      }
+
       if (velocityCalculationsOn) {
         currentPose.velocity.vx = dx_local / 0.01f;
         currentPose.velocity.vy = dy_local / 0.01f;
@@ -211,18 +241,26 @@ void Chassis::odometryTask() {
 
       Eigen::Vector2f local_delta = kinematics * wheel_deltas;
       poseMutex.take();
-      ekf.predict(local_delta.x(), local_delta.y(), d_theta_wheels);
-
-      float current_w = d_theta_meas / 0.01f;
-      float dynamic_R = measurementNoise + std::abs(current_w) * 0.005f;
-      ekf.updateIMU(current_heading_meas, dynamic_R);
 
       float step_dist = local_delta.norm();
       motionDistTraveled += step_dist;
 
-      currentPose.x = ekf.getX();
-      currentPose.y = ekf.getY();
-      currentPose.theta = ekf.getTheta();
+      if (config.kfEnabled) {
+        ekf.predict(local_delta.x(), local_delta.y(), d_theta_wheels);
+
+        float current_w = d_theta_meas / 0.01f;
+        float dynamic_R = measurementNoise + std::abs(current_w) * 0.005f;
+        ekf.updateIMU(current_heading_meas, dynamic_R);
+
+        currentPose.x = ekf.getX();
+        currentPose.y = ekf.getY();
+        currentPose.theta = ekf.getTheta();
+      } else {
+        integrateDeadReckon(currentPose, local_delta.x(), local_delta.y(),
+                            d_theta_meas, current_heading_meas);
+        ekf.setPose(currentPose.x, currentPose.y, currentPose.theta);
+      }
+
       if (velocityCalculationsOn) {
         currentPose.velocity.vx = local_delta.x() / 0.01;
         currentPose.velocity.vy = local_delta.y() / 0.01;
