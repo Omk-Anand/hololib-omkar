@@ -1,432 +1,468 @@
 #include "chassis.h"
-
+#include "pros/misc.hpp"
 #include <algorithm>
 #include <cmath>
-#include <limits>
+#include <iostream>
 
-namespace {
-constexpr float kPi = 3.14159265358979323846f;
+static constexpr float DEG2RAD = M_PI / 180.0f;
+static constexpr float RAD2DEG = 180.0f / M_PI;
+MoveParams Chassis::defaultParams = {};
 
-float clamp127(float value) { return std::clamp(value, -127.0f, 127.0f); }
-
-int toMillivolts(float value) { return static_cast<int>(std::clamp(value, -127.0f, 127.0f) * (12000.0f / 127.0f)); }
-
-float applyCurve(float input, const DriveCurve& curve) {
-    if (std::abs(input) <= curve.deadzone) {
-        return 0.0f;
-    }
-
-    const float sign = input >= 0.0f ? 1.0f : -1.0f;
-    const float magnitude = std::abs(input);
-    float output = magnitude;
-
-    if (curve.curve_multipler != 1.0f) {
-        const float normalized = magnitude / 127.0f;
-        output = std::pow(normalized, curve.curve_multipler) * 127.0f;
-    }
-
-    if (output > 0.0f) {
-        output = std::max(output, curve.minimum_output);
-    }
-
-    return sign * clamp127(output);
-}
-} // namespace
-
-void motionHandlerTask(void* param);
-
-MoveParams Chassis::defaultParams{};
-
-PID::PID(double kP, double kI, double kD, double kF, double windupRange, bool signFlipReset, double slew)
-    : m_gains{kP, kI, kD, kF, slew}, m_windupRange(windupRange), m_signFlipReset(signFlipReset) {}
-
-PID::PID(const PIDGains& gains, double windupRange, bool signFlipReset)
-    : m_gains(gains), m_windupRange(windupRange), m_signFlipReset(signFlipReset) {}
-
-PIDGains PID::getGains() { return m_gains; }
-
-void PID::setGains(PIDGains gains) { m_gains = gains; }
-
-double PID::update(double error) { return update(error, error); }
-
-double PID::update(double error, double measurement) {
-    const uint32_t now = pros::millis();
-    const double dt = m_initialized ? std::max((now - m_previousTime) / 1000.0, 0.001) : 0.02;
-
-    if (!m_initialized) {
-        m_previousError = error;
-        m_previousMeasurement = measurement;
-        m_previousTime = now;
-        m_initialized = true;
-    }
-
-    if (m_signFlipReset && sgn(error) != sgn(m_previousError)) {
-        m_integral = 0.0;
-    }
-
-    if (m_windupRange <= 0.0 || std::abs(error) <= m_windupRange) {
-        m_integral += error * dt;
-    }
-    if (m_integralLimit > 0.0) {
-        m_integral = std::clamp(m_integral, -m_integralLimit, m_integralLimit);
-    }
-
-    const double derivative = (measurement - m_previousMeasurement) / dt;
-    m_filteredDerivative = m_alpha * derivative + (1.0 - m_alpha) * m_filteredDerivative;
-
-    double output = (m_gains.kP * error) + (m_gains.kI * m_integral) - (m_gains.kD * m_filteredDerivative) +
-                    (m_gains.kF * sgn(error));
-
-    if (m_gains.slew > 0.0) {
-        output = std::clamp(output, m_previousOutput - m_gains.slew, m_previousOutput + m_gains.slew);
-    }
-
-    m_previousError = error;
-    m_previousMeasurement = measurement;
-    m_previousTime = now;
-    m_previousOutput = output;
-    return output;
-}
-
-void PID::reset() {
-    m_previousError = 0.0;
-    m_previousMeasurement = 0.0;
-    m_integral = 0.0;
-    m_filteredDerivative = 0.0;
-    m_previousTime = pros::millis();
-    m_initialized = false;
-    m_previousOutput = 0.0;
-}
-
-void PID::setSignFlipReset(bool signFlipReset) { m_signFlipReset = signFlipReset; }
-
-bool PID::getSignFlipReset() { return m_signFlipReset; }
-
-void PID::setWindupRange(double windupRange) { m_windupRange = windupRange; }
-
-double PID::getWindupRange() { return m_windupRange; }
-
-EncoderKalmanFilter::EncoderKalmanFilter(float process_noise, float measurement_noise) : R(measurement_noise) {
-    x.setZero();
-    P.setIdentity();
-    Q = Eigen::Matrix2f::Identity() * process_noise;
-    H << 1.0f, 0.0f;
-}
-
-float EncoderKalmanFilter::update(float measured_position, float) {
-    x(0) = measured_position;
-    return measured_position;
-}
-
-void GainScheduler::addStep(float threshold, float kP, float kI, float kD, float slew) {
-    schedules.push_back({
-        threshold, {kP, kI, kD, 0.0, slew}
-    });
-}
-
-PIDGains GainScheduler::getGains(float error) const {
-    if (schedules.empty()) {
-        return {0.0, 0.0, 0.0, 0.0, 0.0};
-    }
-
-    const float absError = std::abs(error);
-    const ScheduledGain* best = &schedules.front();
-    for (const auto& step : schedules) {
-        if (absError <= step.threshold) {
-            best = &step;
-            break;
-        }
-        best = &step;
-    }
-    return best->gains;
-}
-
-void GainScheduler::clear() { schedules.clear(); }
-
-MotionHandler::MotionHandler() = default;
-
-void MotionHandler::enqueue(std::function<void()> motion, bool async) {
-    lastEnqueuedId++;
-    if (async) {
-        mutex.take();
-        queue.push(std::move(motion));
-        mutex.give();
-        if (!task) {
-            task = new pros::Task(motionHandlerTask, this, "MotionHandler");
-        }
-        return;
-    }
-    running = true;
-    currentRunningId = lastEnqueuedId;
-    motion();
-    running = false;
-}
-
-void MotionHandler::cancelAll() {
-    mutex.take();
-    while (!queue.empty()) {
-        queue.pop();
-    }
-    running = false;
-    mutex.give();
-}
-
-void MotionHandler::waitUntilDone() {
-    while (running || !isQueueEmpty()) {
-        pros::delay(10);
-    }
-}
-
-void MotionHandler::cancelMotion() { running = false; }
-
-bool MotionHandler::isInMotion() { return running; }
-
-void MotionHandler::loop() {
-    while (true) {
-        std::function<void()> next;
-        mutex.take();
-        if (!queue.empty()) {
-            next = queue.front();
-            queue.pop();
-            currentRunningId++;
-            running = true;
-        }
-        mutex.give();
-
-        if (next) {
-            if (onMotionStartCallback) {
-                onMotionStartCallback();
-            }
-            next();
-            running = false;
-        }
-        pros::delay(10);
-    }
-}
-
-void motionHandlerTask(void* param) { static_cast<MotionHandler*>(param)->loop(); }
-
-void ObstacleManager::setRobotDimensions(float width, float length) {
-    robot_width = width;
-    robot_length = length;
-}
-
-void ObstacleManager::addObstacle(float x, float y, float radius) {
-    obstacles.push_back({
-        Eigen::Vector2f{x, y},
-        radius
-    });
-}
-
-void ObstacleManager::removeObstacle(size_t index) {
-    if (index < obstacles.size()) {
-        obstacles.erase(obstacles.begin() + index);
-    }
-}
-
-void ObstacleManager::clearObstacles() { obstacles.clear(); }
-
-const std::vector<Obstacle>& ObstacleManager::getObstacles() const { return obstacles; }
-
-bool ObstacleManager::checkIntersection(
-    const Eigen::Vector2f&, const Eigen::Vector2f&, float, Obstacle&, Eigen::Vector2f&) const {
-    return false;
-}
-
-Eigen::Vector2f ObstacleManager::getAvoidanceTarget(
-    const Eigen::Vector2f&, const Eigen::Vector2f& target_pos, float, float, float, int) const {
-    return target_pos;
-}
-
-Eigen::Vector2f ObstacleManager::getPotentialFieldTarget(
-    const Eigen::Vector2f&, const Eigen::Vector2f& target_pos, float, float, float, float) const {
-    return target_pos;
-}
-
-Chassis::Chassis(
-    pros::Motor fl, pros::Motor fr, pros::Motor bl, pros::Motor br, pros::Imu imu_sensor, ChassisConfig chassisConfig)
-    : frontLeft(fl), frontRight(fr), backLeft(bl), backRight(br), imu(imu_sensor), config(chassisConfig) {}
-
+/**
+ *@brief Calibrates the chassis and calibrates all sensors.
+ *@return void
+ *@note This function should be called before using chassis motions (recommended
+ * to be run in initialize)
+ */
 void Chassis::calibrate() {
-    imu.reset(true);
-    setPose(0.0f, 0.0f, 0.0f);
-}
-
-void Chassis::setXGains(std::vector<ScheduledGain> steps) {
-    xSched.clear();
-    for (const auto& step : steps) {
-        xSched.addStep(step.threshold, step.gains.kP, step.gains.kI, step.gains.kD, step.gains.slew);
+  cancelAllMotions();
+  backLeft.tare_position();
+  backRight.tare_position();
+  frontLeft.tare_position();
+  frontRight.tare_position();
+  motionDistTraveled = 0.0f;
+  prev_fl = 0, prev_fr = 0, prev_bl = 0, prev_br = 0;
+  prev_heading = 0;
+  targetHeadingDriveControl = 0;
+  for (int i = 0; i < motors.size(); i++) {
+    try {
+      if (motors[i].get_temperature() > 60) {
+        std::cout << "Motor " + std::to_string(i) + " overheating" << std::endl;
+      }
+    } catch (...) {
+      std::cout << "Error when evaluating Motor " + std::to_string(i)
+                << std::endl;
     }
+  }
+
+  for (size_t i = 0; i < trackingWheelSensors.size(); ++i) {
+    trackingWheelSensors[i].reset_position();
+    prevTrackingPositions[i] = 0.0f;
+  }
+  imu.reset(true);
+  while (imu.is_calibrating()) {
+    pros::delay(10);
+  }
+  pros::c::controller_rumble(pros::E_CONTROLLER_MASTER, ".");
+  std::cout << "Chassis Calibrated" << std::endl;
 }
 
-void Chassis::setYGains(std::vector<ScheduledGain> steps) {
-    ySched.clear();
-    for (const auto& step : steps) {
-        ySched.addStep(step.threshold, step.gains.kP, step.gains.kI, step.gains.kD, step.gains.slew);
-    }
+/**
+ *@brief Calculates the holonomic voltages for the motors.
+ *@param vx The x-component of the velocity.
+ *@param vy The y-component of the velocity.
+ *@param vt The angular velocity.
+ *@return XDriveVoltages The voltages for the motors.
+ */
+XDriveVoltages Chassis::calculateHolonomic(float vx, float vy, float vt) {
+
+  constexpr float scale = 12000.0f / 127.0f;
+
+  XDriveVoltages v;
+  v.fl = (vy + vx + vt) * scale;
+  v.fr = (vy - vx - vt) * scale;
+  v.bl = (vy - vx + vt) * scale;
+  v.br = (vy + vx - vt) * scale;
+
+  float maxV = std::max({std::abs(v.fl), std::abs(v.fr), std::abs(v.bl),
+                         std::abs(v.br), 12000.0f});
+  if (maxV > 12000.0f) {
+    float r = 12000.0f / maxV;
+    v.fl *= r;
+    v.fr *= r;
+    v.bl *= r;
+    v.br *= r;
+  }
+  return v;
 }
 
-void Chassis::setThetaGains(std::vector<ScheduledGain> steps) {
-    thetaSched.clear();
-    for (const auto& step : steps) {
-        thetaSched.addStep(step.threshold, step.gains.kP, step.gains.kI, step.gains.kD, step.gains.slew);
-    }
+/**
+ *@brief Sets the motor voltages.
+ *@param v The voltages to set.
+ *@return void
+ */
+void Chassis::setMotorVoltages(XDriveVoltages v) {
+  frontLeft.move_voltage((int32_t)v.fl);
+  frontRight.move_voltage((int32_t)v.fr);
+  backLeft.move_voltage((int32_t)v.bl);
+  backRight.move_voltage((int32_t)v.br);
 }
 
+/**
+ *@brief Brakes all motors.
+ *@return void
+ */
+void Chassis::brake() {
+  frontLeft.brake();
+  frontRight.brake();
+  backLeft.brake();
+  backRight.brake();
+}
+
+/**
+ *@brief Sets the pose of the robot.
+ *@param x The x-coordinate of the pose.
+ *@param y The y-coordinate of the pose.
+ *@param theta The heading of the pose.
+ *@return void
+ */
 void Chassis::setPose(float x, float y, float theta) {
-    currentPose.x = x;
-    currentPose.y = y;
-    currentPose.theta = theta;
-    ekf.setPose(x, y, theta * kPi / 180.0f);
+  poseMutex.take();
+  float theta_rad = theta * DEG2RAD;
+  imu.set_rotation(theta);
+
+  currentPose = {x, y, theta_rad};
+  prev_heading = theta_rad;
+
+  ekf.setPose(x, y, theta_rad);
+
+  poseMutex.give();
 }
 
+/**
+ *@brief Sets the pose of the robot.
+ *@param pose The pose to set.
+ *@return void
+ */
 void Chassis::setPose(Pose pose) { setPose(pose.x, pose.y, pose.theta); }
 
+/**
+ *@brief Gets the pose of the robot.
+ *@param radians Whether to return the heading in radians.
+ *@return Pose The pose of the robot.
+ */
 Pose Chassis::getPose(bool radians) {
-    currentPose.theta = static_cast<float>(imu.get_rotation());
-    if (radians) {
-        Pose pose = currentPose;
-        pose.theta *= kPi / 180.0f;
-        return pose;
+  poseMutex.take();
+  Pose p = currentPose;
+  poseMutex.give();
+  if (!radians)
+    p.theta *= RAD2DEG;
+  return p;
+}
+
+/**
+ *@brief Sets the PID gains for the x-axis.
+ *@param steps The PID gains for the x-axis.
+ *@return void
+ */
+void Chassis::setXGains(std::vector<ScheduledGain> steps) {
+  xSched.clear();
+  for (auto &s : steps)
+    xSched.addStep(s.threshold, s.gains.kP, s.gains.kI, s.gains.kD,
+                   s.gains.slew);
+}
+
+/**
+ *@brief Sets the PID gains for the y-axis.
+ *@param steps The PID gains for the y-axis.
+ *@return void
+ */
+void Chassis::setYGains(std::vector<ScheduledGain> steps) {
+  ySched.clear();
+  for (auto &s : steps)
+    ySched.addStep(s.threshold, s.gains.kP, s.gains.kI, s.gains.kD,
+                   s.gains.slew);
+}
+
+/**
+ *@brief Sets the PID gains for the theta-axis.
+ *@param steps The PID gains for the theta-axis.
+ *@return void
+ */
+void Chassis::setThetaGains(std::vector<ScheduledGain> steps) {
+  thetaSched.clear();
+  for (auto &s : steps)
+    thetaSched.addStep(s.threshold, s.gains.kP, s.gains.kI, s.gains.kD,
+                       s.gains.slew);
+}
+
+/**
+ *@brief Controls the drive motors.
+ *@param forward The forward velocity.
+ *@param sideways The sideways velocity.
+ *@param rotation The rotation velocity.
+ *@param drivecurves The drive curves to use.
+ *@param fieldCentric Whether to use field centric control.
+ *@param headingOffset The heading offset.
+ *@param correction The correction to apply.
+ *@return void
+ */
+void Chassis::driveControl(float forward, float sideways, float rotation,
+                           DriveCurves drivecurves, bool fieldCentric,
+                           float headingOffset, DriveCorrection correction) {
+  static bool headingInitialized = false;
+  static float targetHeading = 0.0f;
+  static PID headingPID(0, 0, 0, 0);
+  static uint32_t lastRotationTime = 0;
+  static bool wasRotating = false;
+  constexpr float MAX_DRIVE_INPUT = 127.0f;
+  constexpr float SETTLE_DELAY_MS = 150.0f;
+  constexpr float MAX_CORRECTION = 40.0f;
+
+  if (!headingInitialized) {
+    targetHeading = getPose(false).theta;
+    headingPID.setGains(
+        {correction.kP, correction.kI, correction.kD, 0.0, 0.0});
+    headingInitialized = true;
+  }
+
+  auto applyCurve = [&](float x, const DriveCurve &c) -> float {
+    if (std::abs(x) < c.deadzone)
+      return 0.0f;
+
+    float sign = (x >= 0.0f) ? 1.0f : -1.0f;
+    float normalized =
+        (std::abs(x) - c.deadzone) / (MAX_DRIVE_INPUT - c.deadzone);
+
+    normalized = std::clamp(normalized, 0.0f, 1.0f);
+    normalized = std::pow(normalized, c.curve_multipler);
+
+    float output = normalized * MAX_DRIVE_INPUT;
+    if (output > 0.0f && output < c.minimum_output) {
+      output = c.minimum_output;
     }
-    return currentPose;
-}
 
-XDriveVoltages Chassis::calculateHolonomic(float vx, float vy, float vt) {
-    return {
-        clamp127(vy + vx + vt),
-        clamp127(vy - vx - vt),
-        clamp127(vy - vx + vt),
-        clamp127(vy + vx - vt),
-    };
-}
+    return output * sign;
+  };
+  forward = applyCurve(forward, drivecurves.movement);
+  sideways = applyCurve(sideways, drivecurves.movement);
 
-void Chassis::setMotorVoltages(XDriveVoltages v) {
-    frontLeft.move_voltage(toMillivolts(v.fl));
-    frontRight.move_voltage(toMillivolts(v.fr));
-    backLeft.move_voltage(toMillivolts(v.bl));
-    backRight.move_voltage(toMillivolts(v.br));
-}
+  float robotForward = forward;
+  float robotSideways = sideways;
+  if (fieldCentric) {
 
-void Chassis::brake() {
-    frontLeft.brake();
-    frontRight.brake();
-    backLeft.brake();
-    backRight.brake();
-}
+    float adjustedTheta = getPose(false).theta - headingOffset;
 
-void Chassis::driveControl(float forward,
-                           float sideways,
-                           float rotation,
-                           DriveCurves drivecurves,
-                           bool fieldCentric,
-                           float headingOffset,
-                           DriveCorrection) {
-    float y = applyCurve(forward, drivecurves.movement);
-    float x = applyCurve(sideways, drivecurves.movement);
-    float turn = applyCurve(rotation, drivecurves.rotation);
+    float thetaRad = adjustedTheta * DEG2RAD;
 
-    if (fieldCentric) {
-        const float heading = (static_cast<float>(imu.get_rotation()) - headingOffset) * kPi / 180.0f;
-        const float cosH = std::cos(heading);
-        const float sinH = std::sin(heading);
-        const float rotatedX = x * cosH - y * sinH;
-        const float rotatedY = x * sinH + y * cosH;
-        x = rotatedX;
-        y = rotatedY;
+    robotSideways =
+        sideways * std::cos(thetaRad) - forward * std::sin(thetaRad);
+
+    robotForward = sideways * std::sin(thetaRad) + forward * std::cos(thetaRad);
+    float inputMagnitude = std::sqrt(forward * forward + sideways * sideways);
+
+    float rotatedMagnitude =
+        std::sqrt(robotForward * robotForward + robotSideways * robotSideways);
+
+    if (rotatedMagnitude > 0.001f) {
+
+      float scale = inputMagnitude / rotatedMagnitude;
+
+      robotForward *= scale;
+      robotSideways *= scale;
+    }
+  }
+
+  bool isRotating = std::abs(rotation) >= drivecurves.rotation.deadzone;
+
+  if (isRotating) {
+    rotation = applyCurve(rotation, drivecurves.rotation);
+    targetHeading = getPose(false).theta;
+    lastRotationTime = pros::millis();
+    wasRotating = true;
+
+  } else {
+    uint32_t timeSinceRotation = pros::millis() - lastRotationTime;
+
+    if (wasRotating) {
+      targetHeading = getPose(false).theta;
+      headingPID.reset();
+      headingPID.setGains(
+          {correction.kP, correction.kI, correction.kD, 0.0, 0.0});
+      wasRotating = false;
     }
 
-    setMotorVoltages(calculateHolonomic(x, y, turn));
+    if (timeSinceRotation < (uint32_t)SETTLE_DELAY_MS) {
+      rotation = 0.0f;
+      targetHeading = getPose(false).theta;
+    } else if (correction.correctionOn) {
+      float currentHeading = getPose(false).theta;
+      float angleError = getAngleError(targetHeading, currentHeading);
+
+      if (std::abs(angleError) < 0.5f) {
+        rotation = 0.0f;
+      } else {
+        rotation = (float)headingPID.update(angleError);
+        rotation = std::clamp(rotation, -MAX_CORRECTION, MAX_CORRECTION);
+      }
+    } else {
+      rotation = 0.0f;
+    }
+  }
+  setMotorVoltages(calculateHolonomic(robotSideways, robotForward, rotation));
 }
 
-void Chassis::followPath(const std::vector<PathPoint>&, float, MoveParams, HeadingMode, float, bool) {}
-
-void Chassis::turnToHeading(float targetDeg, MoveParams params) {
-    const float maxSpeed = std::clamp(params.maxRotationSpeed, 0.0f, 127.0f);
-    const float exitRange = params.exitRange > 0.0f ? params.exitRange : 1.5f;
-    if (params.timeout == 0 || maxSpeed <= 0.0f) {
-        brake();
-        return;
-    }
-
-    const uint32_t start = pros::millis();
-    float lastHeading = std::numeric_limits<float>::quiet_NaN();
-    uint32_t lastProgressTime = start;
-    while (pros::millis() - start < params.timeout) {
-        const float heading = static_cast<float>(imu.get_rotation());
-        if (!std::isfinite(heading)) {
-            brake();
-            return;
-        }
-
-        const float error = getAngleError(targetDeg, heading);
-        if (std::abs(error) <= exitRange) {
-            break;
-        }
-        if (!std::isfinite(lastHeading) || std::abs(getAngleError(heading, lastHeading)) > 0.5f) {
-            lastHeading = heading;
-            lastProgressTime = pros::millis();
-        } else if (pros::millis() - lastProgressTime > 500 && std::abs(error) > 10.0f) {
-            break;
-        }
-
-        float output = std::clamp(error * 0.8f, -maxSpeed, maxSpeed);
-        if (params.minSpeed > 0.0f && std::abs(output) < params.minSpeed) {
-            output = params.minSpeed * (output >= 0.0f ? 1.0f : -1.0f);
-        }
-        setMotorVoltages(calculateHolonomic(0.0f, 0.0f, output));
-        pros::delay(10);
-    }
-    brake();
-}
-
-void Chassis::turnToPoint(float, float, MoveParams) {}
-void Chassis::moveToPoint(float, float, MoveParams, bool) {}
-void Chassis::moveRelative(float, float, MoveParams, bool) {}
-void Chassis::moveDistance(float, MoveParams, bool) {}
-void Chassis::strafeDistance(float, MoveParams, bool) {}
-void Chassis::moveToPose(float, float, float, MoveParams) {}
-void Chassis::curveCircle(float, float, MoveParams, CurveDirection) {}
+/**
+ *@brief Waits for all motion to complete.
+ *@return void
+ */
 void Chassis::waitUntilDone() { motion.waitUntilDone(); }
-void Chassis::cancelAllMotions() { motion.cancelAll(); }
-void Chassis::odometryTask() {}
-float Chassis::getDistanceTraveled(bool) { return motionDistTraveled; }
-void Chassis::cancelMotion() { motion.cancelMotion(); }
-void Chassis::waitUntil(float) {}
-void Chassis::setEKFGains(float xNoise, float yNoise, float thetaNoise, float measNoise) {
-    xProcessNoise = xNoise;
-    yProcessNoise = yNoise;
-    thetaProcessNoise = thetaNoise;
-    measurementNoise = measNoise;
-    ekf.setProcessNoise(xNoise, yNoise, thetaNoise, measNoise);
+
+/**
+ *@brief Waits for the robot to travel a specific distance.
+ *@param dist The distance to travel.
+ *@return void
+ */
+void Chassis::waitUntil(float dist) {
+  uint32_t targetId = motion.getLastEnqueuedId();
+  while (true) {
+    poseMutex.take();
+    float currentDist = motionDistTraveled;
+    poseMutex.give();
+
+    uint32_t runningId = motion.getCurrentRunningId();
+    bool empty = motion.isQueueEmpty();
+    if (empty && runningId < targetId) {
+      break;
+    }
+
+    if (runningId >= targetId) {
+      if (runningId > targetId || currentDist >= dist) {
+        break;
+      }
+    }
+
+    pros::delay(10);
+  }
 }
-void Chassis::setVelocityCalculations(bool state) { velocityCalculationsOn = state; }
-bool Chassis::detectCollision() { return false; }
+
+/**
+ *@brief Cancels the current motion.
+ *@return void
+ */
+void Chassis::cancelMotion() {
+  motion.cancelMotion();
+  brake();
+}
+
+/**
+ *@brief Cancels all motion.
+ *@return void
+ */
+void Chassis::cancelAllMotions() {
+  motion.cancelAll();
+  brake();
+}
+
+/**
+ *@brief Gets the distance the robot has traveled.
+ *@param convertToMeters Whether to convert to meters.
+ *@return float The distance traveled.
+ */
+float Chassis::getDistanceTraveled(bool convertToMeters) {
+  poseMutex.take();
+  float dist = motionDistTraveled;
+  poseMutex.give();
+  if (convertToMeters)
+    return dist * 0.0254f;
+  return dist;
+}
+
+/**
+ *@brief Sets the EKF gains.
+ *@param xProcessNoise The x-process noise.
+ *@param yProcessNoise The y-process noise.
+ *@param thetaProcessNoise The theta-process noise.
+ *@param measurementNoise The measurement noise.
+ *@return void
+ */
+void Chassis::setEKFGains(float xProcessNoise, float yProcessNoise,
+                          float thetaProcessNoise, float measurementNoise) {
+  ekf.setProcessNoise(xProcessNoise, yProcessNoise, thetaProcessNoise,
+                      measurementNoise);
+}
+
+/**
+ *@brief Enables or disables velocity calculations.
+ *@param state Whether to enable velocity calculations.
+ *@return void
+ */
+void Chassis::setVelocityCalculations(bool state) {
+  velocityCalculationsOn = state;
+}
+
+/**
+ *@brief Detects if the robot is colliding.
+ *@return bool True if the robot is colliding.
+ */
+bool Chassis::detectCollision() {
+  const int32_t TARGET_VOLTAGE_THRESHOLD = 3000;
+  const uint32_t DEBOUNCE_TIME_MS = 250;
+
+  if (last_collision_check_time == 0)
+    last_collision_check_time = pros::millis();
+
+  uint32_t now = pros::millis();
+  uint32_t dt = now - last_collision_check_time;
+  last_collision_check_time = now;
+  auto is_wheel_slipping = [&](pros::Motor &motor) {
+    int32_t commanded_voltage = std::abs(motor.get_voltage());
+    if (commanded_voltage < TARGET_VOLTAGE_THRESHOLD) {
+      return false;
+    }
+
+    double actual = std::abs(motor.get_actual_velocity());
+    int32_t current = motor.get_current_draw();
+    double temp = motor.get_temperature();
+
+    int32_t dynamic_current_threshold = 1200;
+    if (temp > 50.0) {
+      dynamic_current_threshold = 900;
+    }
+
+    bool speed_deficit = actual < 30.0;
+    bool heavy_load = current > dynamic_current_threshold;
+
+    return speed_deficit && heavy_load;
+  };
+  int slip_count = 0;
+  if (is_wheel_slipping(frontLeft))
+    slip_count++;
+  if (is_wheel_slipping(frontRight))
+    slip_count++;
+  if (is_wheel_slipping(backLeft))
+    slip_count++;
+  if (is_wheel_slipping(backRight))
+    slip_count++;
+  bool physically_blocked = (slip_count >= 2);
+
+  if (physically_blocked) {
+    stall_accumulator_ms += dt;
+  } else {
+    stall_accumulator_ms = 0;
+  }
+
+  return stall_accumulator_ms >= DEBOUNCE_TIME_MS;
+}
+
+/**
+ *@brief Moves the robot using open-loop control.
+ *@param forward The forward movement distance.
+ *@param sideways The sideways movement distance.
+ *@param rotation The rotation distance.
+ *@return void
+ */
 void Chassis::openLoop(float forward, float sideways, float rotation) {
-    setMotorVoltages(calculateHolonomic(sideways, forward, rotation));
+  setMotorVoltages(calculateHolonomic(sideways, forward, rotation));
 }
-void Chassis::addObstacle(float x, float y, float radius) { obstacles.addObstacle(x, y, radius); }
-void Chassis::removeObstacle(size_t index) { obstacles.removeObstacle(index); }
-void Chassis::clearObstacles() { obstacles.clearObstacles(); }
-void Chassis::setAvoidanceMode(AvoidanceMode mode) { avoidanceMode = mode; }
-void Chassis::setAvoidanceParams(float safetyMargin, float clearance) {
-    avoidanceSafetyMargin = safetyMargin;
-    avoidanceClearance = clearance;
-}
-void Chassis::setPotentialFieldParams(float ka, float kr, float influenceRadius) {
-    pf_ka = ka;
-    pf_kr = kr;
-    pf_influence_radius = influenceRadius;
-}
-void Chassis::setRobotDimensionsAvoidance(float width, float height) { obstacles.setRobotDimensions(width, height); }
-float Chassis::radToDeg(float rad) { return rad * 180.0f / kPi; }
-float Chassis::degToRad(float deg) { return deg * kPi / 180.0f; }
-void Chassis::setEKFstate(bool state) { config.kfEnabled = state; }
-void Chassis::addTrackingWheel(TrackingWheelConfig config) { trackingWheelConfigs.push_back(config); }
-void Chassis::clearTrackingWheels() { trackingWheelConfigs.clear(); }
-void Chassis::setMoveParams(MoveParams params) { defaultParams = params; }
-void Chassis::swingTurn(float, SwingSide, MoveParams) {}
-void Chassis::getControllerInput(pros::Controller) {}
-void Chassis::logReplayData(pros::Controller, int) {}
-void Chassis::disableReplayDataLogging() {}
-void Chassis::runDriverReplay(std::vector<PathPoint>, float) {}
+
+/**
+ *@brief Converts radians to degrees.
+ *@param rad The angle in radians.
+ *@return float The angle in degrees.
+ */
+float Chassis::radToDeg(float rad) { return rad * RAD2DEG; }
+
+/**
+ *@brief Converts degrees to radians.
+ *@param deg The angle in degrees.
+ *@return float The angle in radians.
+ */
+float Chassis::degToRad(float deg) { return deg * DEG2RAD; }
+
+/**
+ *@brief Enables or disables the EKF.
+ *@param state Whether to enable the EKF.
+ *@return void
+ */
+void Chassis::setEKFstate(bool state) { this->config.kfEnabled = state; }
