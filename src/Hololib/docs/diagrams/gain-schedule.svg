@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 300" width="680" height="300" role="img" aria-label="Gain scheduling: aggressive PID gains far from the target hand off to gentle gains as the robot settles in">
+  <style>
+    text { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .zh  { font-weight: 700; font-size: 14px; fill: #20203c; }
+    .zs  { font-size: 12.5px; fill: #5a5a6e; }
+    .ax  { font-size: 12.5px; fill: #8888a0; }
+    .out { font-size: 12.5px; font-weight: 600; fill: #4640c4; }
+  </style>
+  <defs>
+    <marker id="axend" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8888a0"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="678" height="298" rx="16" fill="#ffffff" stroke="#e7e6fb" stroke-width="2"/>
+
+  <!-- gain zones -->
+  <rect x="70"  y="58" width="220" height="178" fill="#cbc8f6"/>
+  <rect x="290" y="58" width="170" height="178" fill="#e0def9"/>
+  <rect x="460" y="58" width="160" height="178" fill="#f1f0fd"/>
+
+  <text class="zh" x="180" y="88"  text-anchor="middle">FAR</text>
+  <text class="zs" x="180" y="108" text-anchor="middle">high kP, fast slew</text>
+  <text class="zs" x="180" y="125" text-anchor="middle">accelerate hard</text>
+
+  <text class="zh" x="375" y="88"  text-anchor="middle">MID</text>
+  <text class="zs" x="375" y="108" text-anchor="middle">gains blend</text>
+  <text class="zs" x="375" y="125" text-anchor="middle">across</text>
+
+  <text class="zh" x="540" y="88"  text-anchor="middle">NEAR</text>
+  <text class="zs" x="540" y="108" text-anchor="middle">more kD, slow slew</text>
+  <text class="zs" x="540" y="125" text-anchor="middle">settle, no overshoot</text>
+
+  <!-- control output curve -->
+  <path d="M70,150 C180,150 250,158 330,178 C420,200 500,222 600,230"
+        fill="none" stroke="#5b54e6" stroke-width="3.2"/>
+  <text class="out" x="120" y="168">control output</text>
+
+  <!-- axis -->
+  <line x1="70" y1="236" x2="632" y2="236" stroke="#8888a0" stroke-width="1.6" marker-end="url(#axend)"/>
+  <text class="ax" x="70"  y="258" text-anchor="start">error large (far from target)</text>
+  <text class="ax" x="600" y="258" text-anchor="end">error → 0</text>
+
+  <!-- target marker -->
+  <circle cx="600" cy="236" r="7" fill="#1f9d63"/>
+  <text class="ax" x="600" y="284" text-anchor="middle" fill="#177a4d">target</text>
+</svg>

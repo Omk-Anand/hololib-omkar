@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 340" width="680" height="340" role="img" aria-label="The Pose EKF predict-correct loop fusing IMU, tracking wheels, and motor encoders">
+  <style>
+    text { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .h    { font-weight: 700; font-size: 19px; fill: #20203c; }
+    .sub  { font-size: 13px; fill: #5a5a6e; }
+    .lbl  { font-size: 13px; fill: #4640c4; font-weight: 600; }
+    .chip { font-size: 13px; font-weight: 600; fill: #20203c; }
+    .cap  { font-size: 12.5px; fill: #8888a0; font-style: italic; }
+  </style>
+  <defs>
+    <marker id="ai" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5b54e6"/>
+    </marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8b86f0"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="678" height="338" rx="16" fill="#ffffff" stroke="#e7e6fb" stroke-width="2"/>
+
+  <!-- Predict -->
+  <rect x="80" y="78" width="210" height="92" rx="14" fill="#f4f4fe" stroke="#8b86f0" stroke-width="2"/>
+  <text class="h"   x="185" y="116" text-anchor="middle">Predict</text>
+  <text class="sub" x="185" y="140" text-anchor="middle">holonomic motion model</text>
+
+  <!-- Correct -->
+  <rect x="390" y="78" width="210" height="92" rx="14" fill="#ecebfd" stroke="#5b54e6" stroke-width="2"/>
+  <text class="h"   x="495" y="116" text-anchor="middle">Correct</text>
+  <text class="sub" x="495" y="140" text-anchor="middle">weight by sensor trust</text>
+
+  <!-- top arc: predict -> correct -->
+  <path d="M292,90 C328,56 354,56 388,90" fill="none" stroke="#5b54e6" stroke-width="2.2" marker-end="url(#ai)"/>
+  <text class="lbl" x="340" y="50" text-anchor="middle">predicted pose</text>
+
+  <!-- bottom arc: correct -> predict -->
+  <path d="M388,158 C354,192 328,192 292,158" fill="none" stroke="#5b54e6" stroke-width="2.2" marker-end="url(#ai)"/>
+  <text class="lbl" x="340" y="208" text-anchor="middle">corrected pose (x, y, &#952;)</text>
+
+  <!-- sensor chips -->
+  <rect x="78"  y="256" width="150" height="46" rx="12" fill="#ffffff" stroke="#cfcdf6" stroke-width="1.6"/>
+  <text class="chip" x="153" y="284" text-anchor="middle">IMU gyro</text>
+
+  <rect x="265" y="256" width="150" height="46" rx="12" fill="#ffffff" stroke="#cfcdf6" stroke-width="1.6"/>
+  <text class="chip" x="340" y="284" text-anchor="middle">tracking wheels</text>
+
+  <rect x="452" y="256" width="150" height="46" rx="12" fill="#ffffff" stroke="#cfcdf6" stroke-width="1.6"/>
+  <text class="chip" x="527" y="284" text-anchor="middle">motor encoders</text>
+
+  <!-- measurement arrows into Correct -->
+  <path d="M170,256 C220,215 360,200 450,172" fill="none" stroke="#8b86f0" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#ag)"/>
+  <path d="M345,256 C380,225 430,205 480,172" fill="none" stroke="#8b86f0" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#ag)"/>
+  <path d="M527,256 C527,220 525,200 522,172" fill="none" stroke="#8b86f0" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#ag)"/>
+
+  <text class="cap" x="340" y="328" text-anchor="middle">one full cycle, repeated a few hundred times every second</text>
+</svg>

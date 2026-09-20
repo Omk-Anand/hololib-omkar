@@ -1,43 +1,25 @@
 #include "main.h"
 #include "Eigen/Core" // IWYU pragma: export
-#include "hololib/chassis.hpp"
-#include "hololib/config.hpp"
-#include "hololib/localization/ApriltagLocalization.hpp"
-#include "hololib/localization/odometry.hpp"
-#include "hololib/motions/motion_handler.hpp"
-#include "hololib/motions/motions.hpp"
-#include "hololib/util/GainScheduler.hpp"
-#include "hololib/util/replay.hpp"
-// Keep liftlib's names under liftlib:: -- hololib::PID already exists and
-// would collide otherwise.
+#include "Subsystems/modular_lift.h"
+#include "chassis.h"
 #define LIFTLIB_NO_GLOBAL_NAMES
 #include "liftlib/liftlib.hpp"
-#include "pros/ai_vision.hpp"
+//#include "distanceReset.h"
 #include "pros/imu.hpp"
-#include "pros/misc.h"
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <print>
+#include <iostream>
+#include <vector>
 
-
-
-// Motor ports (negative for reversing motor)
+// Initialize motor ports (negative for reversing motor)
 int frontLPort = 11;
 int frontRPort = 12;
 int backLPort = 20;
 int backRPort = 17;
 
-// IMU port
+// Initialize IMU port
 int imuPort = 18;
 
-// AI Vision sensor -- not on the robot right now, so left undefined.
-// config.hpp declares `extern pros::AIVision visionSensor`, and the build links
-// fine without it only because nothing references that symbol. Constructing an
-// ApriltagLocalization would make it an undefined-reference link error, so
-// uncomment this and the definition below (with the real port) before adding
-// any AprilTag localization.
-// int visionPort = 5;
 Eigen::Matrix3f cameraMatrix = (Eigen::Matrix3f() << 383.57019326565296f * 0.5f,
                                 0.0f,
                                 322.50382974986405f * 0.5f,
@@ -60,25 +42,26 @@ Eigen::Vector<float, 5> distCoeffs = (Eigen::Vector<float, 5>() << -0.0472713119
 
 pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
+std::vector<LiftMotorConfig> lift_motor_configs = {{18, pros::MotorGear::blue},
+                                                   {19, pros::MotorGear::blue}};
 
+pros::Controller master(pros::E_CONTROLLER_MASTER);
+pros::Motor frontl(frontLPort, pros::MotorGear::blue);
+pros::Motor frontr(frontRPort, pros::MotorGear::blue);
+pros::Motor backl(backLPort, pros::MotorGear::blue);
+pros::Motor backr(backRPort, pros::MotorGear::blue);
+pros::Imu imu(imuPort);
 
-// Initalize motors, IMU, odometry, and chassis
-pros::Motor frontLeft = pros::Motor(frontLPort, pros::MotorGear::blue);
-pros::Motor frontRight = pros::Motor(frontRPort, pros::MotorGear::blue);
-pros::Motor backLeft = pros::Motor(backLPort, pros::MotorGear::blue);
-pros::Motor backRight = pros::Motor(backRPort, pros::MotorGear::blue);
-
-pros::Imu imu = pros::Imu(imuPort);
+pros::Distance front = pros::Distance(4);
+pros::Distance back = pros::Distance(3);
+pros::Distance left = pros::Distance(5);
+pros::Distance right = pros::Distance(2);
 // pros::AIVision visionSensor = pros::AIVision(visionPort);
 
 pros::Motor clawGripper = pros::Motor(10, pros::MotorGear::green); // open/close rollers
 
 pros::Motor intake = pros::Motor(8, pros::MotorGear::blue);
 
-
-// Read-only handle on the claw pivot motor, used only for get_current_draw()
-// during homing. liftlib owns commanding port 9 through clawRotationLift; this
-// never writes to it.
 pros::Motor clawRotationMotor(9, pros::MotorGear::green);
 
 liftlib::PID clawRotationPID(/*kP=*/5.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/2.0f);
@@ -107,206 +90,123 @@ liftlib::Subsystem liftLift(
         {liftlib::PID(/*kP=*/20.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/24.0f},
         {liftlib::PID(/*kP=*/0.0f, /*kI=*/0.0f, /*kD=*/0.0f, /*threshold=*/1.0f), /*position_in=*/36.0f},
     });
+// Initialize Chassis
+Chassis chassis(frontl, frontr, backl, backr, imu,
+               {.drivetrainWidth = 9.1,    // width from wheel to wheel
+                .drivetrainLength = 10.25, // length from wheel to wheel
+                .wheelDiameter = 3.25,     // wheel diameter in inches (should
+                                           // be tuned to EFFECTIVE wheel
+                                           // diameter)
+                .gearRatio = 0.5,          // gear ratio of the drivetrain
+                .kfEnabled = false});      // Enables ekf, only use if you know
+                                           // how to tune the process and
+                                           // measurement noise.
 
+// Initialize lift motor configs
+LiftConfig my_lift_config = {
+    .gear_ratio = 12.0f / 84.0f,
+    .arm_length = 15.0f,
+    .arm_mass_kg = 2.0f,
+    .payload_mass_kg = 0.0f,
+    .kG_base = 1750.0f / (2.0f * 9.81f),
+    .tolerance = 5.0f,
+    .K =
+        Eigen::Matrix<float, 1, 2>{
+            {2.9331f, 1.4557f}}, // Initialize k gain matrix for lqr
+    .spool_radius = 1.5f};
 
-
-
-
-
-
-
-
-
-hololib::ChassisConfig chassis_config = {
-    .drivetrainWidth = 9.1, .drivetrainLength = 10.25, .wheelDiameter = 3.25, .gearRatio = 0.5};
-hololib::EncoderEKFOdometry odom =
-hololib::EncoderEKFOdometry(frontLeft, frontRight, backLeft, backRight, imu, chassis_config);
-const std::function<hololib::Pose(bool)> poseGetter = [](bool radians) { return odom.getPose(radians); };
-
-hololib::Chassis chassis = hololib::Chassis(frontLeft, frontRight, backLeft, backRight, imu, odom);
-hololib::GainScheduler xSched = hololib::GainScheduler();
-hololib::GainScheduler ySched = hololib::GainScheduler();
-hololib::GainScheduler thetaSched = hololib::GainScheduler();
-
-// Initialize obstacle manager
-hololib::ObstacleManager obstacles = hololib::ObstacleManager();
+ModularLift my_lift(lift_motor_configs, LiftMechanism::CASCADE,
+                    my_lift_config); // initialize lift type and config (in
+                                     // beta, uses lqr control)
 
 void initialize() {
-    pros::lcd::initialize();
-    // Calibrate the chassis
-    chassis.calibrate();
-    odom.startTask();
+  pros::lcd::initialize();
 
-    // Tare both subsystems and seed their position readings. Whatever pose the
-    // claw and lift are resting in at boot becomes 0 for each of them, so power
-    // the robot on with the lift retracted.
-    clawRotationLift.initialize();
-    liftLift.initialize();
-    clawRotationLift.setFeedforward(liftlib::Feedforward::cosine(/*kG=*/0.0f, /*horizontal=*/0.0f, /*degreesPerUnit=*/1.0f));
+  // Calibrate the chassis
+  chassis.calibrate();
+  chassis.setPose(0, 0, 0);
 
-    // Required for the R1/R2 lock in opcontrol: holdActively() early-returns to
-    // brake() whenever the feedforward is disabled (isEnabled() is
-    // `model != None && kG != 0`), so with this commented out the lift only
-    // brakes instead of actively holding.
-    //
-    // Constant, not cosine -- a cascade's load does not change with height. kG is
-    // in liftlib's -127..127 output units and is NOT measured: it came from
-    // converting ModularLift's old millivolt feedforward. Tune it by watching
-    // whether the lift holds height, sags, or climbs when you let go of R1/R2.
-    liftLift.setFeedforward(liftlib::Feedforward::constant(/*kG=*/18.5f));
+  // Set PID gains for chassis
+  chassis.setXGains({
+      {36.0, {15, 0, 2.4}},
+      {0.0, {25, 0, 0.5}},
+  });
+  chassis.setYGains({
+      {36.0, {15, 0, 1.6}},
+      {0.0, {20, 0, 1.5}},
+  });
+  chassis.setThetaGains(
+      {{90.0, {2.76411f, 0.0116046f, 0.0384008f}}, 
+      {0, {3, 0, 0.04}}});
 
-    // Set PID gains for chassis
-    xSched.setGains({
-        {36.0, {15, 0, 2.4}},
-        {0.0,  {25, 0, 0.5}},
-    });
+  // Basically allows you to see the velocity of the chassis (in/s) (helpful for
+  // making custom motions)
+  chassis.setVelocityCalculations(true);
 
-    ySched.setGains({
-        {36.0, {15, 0, 1.6}},
-        {0.0,  {20, 0, 1.5}},
-    });
-
-    thetaSched.setGains({
-        {90.0, {2.76411f, 0.0116046f, 0.0384008f}},
-        {0,    {3, 0, 0.04}                      }
-    });
-
-
-
-    // Basically allows you to see the velocity of the chassis (in/s) (helpful
-    // for making custom motions)
-    odom.setVelocityCalculations(true);
-
-    // LCD screen task to display chassis data
-
-    pros::Task screen_task([&]() {
-        while (true) {
-            hololib::Pose pose = odom.getPose(false); // false means degrees, true means radians
-            pros::lcd::print(0, "X: %.3f", pose.x);
-            pros::lcd::print(1, "Y: %.3f", pose.y);
-            pros::lcd::print(2, "Theta: %.3f", pose.theta);
-            pros::lcd::print(3, "X Velocity: %.3f", pose.velocity.vx);
-            pros::lcd::print(4, "Y Velocity: %.3f", pose.velocity.vy);
-            pros::lcd::print(5, "Theta Velocity: %.3f", pose.velocity.w);
-            pros::lcd::print(6, "Claw rot (deg): %.2f", clawRotationLift.getPosition());
-            pros::lcd::print(7, "Lift (in): %.2f", liftLift.getPosition());
-            pros::delay(50);
-        }
-    });
+  // LCD screen task to display chassis data
+  pros::Task screen_task([&]() {
+    while (true) {
+      Pose pose =
+          chassis.getPose(false); // false means degrees, true means radians
+      pros::lcd::print(0, "X: %.3f", pose.x);
+      pros::lcd::print(1, "Y: %.3f", pose.y);
+      pros::lcd::print(2, "Theta: %.3f", pose.theta);
+      pros::lcd::print(3, "X Velocity: %.3f", pose.velocity.vx);
+      pros::lcd::print(4, "Y Velocity: %.3f", pose.velocity.vy);
+      pros::lcd::print(5, "Theta Velocity: %.3f", pose.velocity.w);
+      pros::delay(50);
+    }
+  });
 }
-
-
 
 void disabled() {
-    pros::lcd::print(0, "test");
-    odom.setPose(0, 0, 0);
+  chassis.setPose(0, 0, 0);
+  my_lift.cancel();
 }
-
-
 
 void competition_initialize() {}
 
-
-
 /*
-
 Run:
-
 python tools/sim_auton.py
-
 then open the file with the browser of your choice.
-
 */
-
 void simulation() {}
 
-
-
 void autonomous() {
-
-  chassisAsync(hololib::turnToHeading(45));
-
+  chassis.setPose(0, 0, 0);
+  chassis.turnToHeading(90, {});
 }
 
-
-
+void testFunction() { std::cout << "Function called" << std::endl; }
 
 void opcontrol() {
+  chassis.setPose(0, 0, 00);
+  chassis.setEKFstate(false); // turn off EKF for driver control
 
-  odom.setKalmanFilterEnabled(true);
-  odom.setPose(0, 0, 0);
-  hololib::Chassis::DriveCurve movement_curve{.curve_multipler = 1.01, .deadzone = 5, .minimum_output = 5};
-  hololib::Chassis::DriveCurve rotation_curve{.curve_multipler = 1.028, .deadzone = 5, .minimum_output = 5};
+  // Example drive curves
+  DriveCurve movement_curve{
+      .curve_multipler = 1.01, .deadzone = 5, .minimum_output = 5};
+  DriveCurve rotation_curve{
+      .curve_multipler = 1.028, .deadzone = 5, .minimum_output = 5};
   int prev_forward = 0;
   int prev_sideways = 0;
   int prev_rotation = 0;
 
-  // --- drive direction toggle (UP) ----------------------------------------
-  // Swaps which end of the bot counts as the front, so the driver can lead with
-  // either end without turning around. Each press flips it.
-  //
-  // Flipping the front is a 180 degree rotation of the robot frame, which for a
-  // holonomic drive is just negating both translation axes -- forward becomes
-  // backward and left becomes right together. Negating only one would mirror the
-  // bot instead of turning it, and strafing would end up backwards.
-  //
-  // Rotation is deliberately NOT negated: a clockwise spin is clockwise no
-  // matter which end you call the front, because the bot turns about its centre.
-  // Flipping it too would make the right stick fight the driver.
-  //
-  // This is purely a driver-control convenience. Odometry, heading and every
-  // autonomous motion still use the real, unflipped front of the robot.
+
   bool reverseFront = false;
   bool prevUp = false;
 
   constexpr float LIFT_JOG_POWER = 127.0f; // liftlib full scale, == 12000 mV
   bool liftJogging = false;
 
-  // --- claw pivot positions ------------------------------------------------
-  // The claw has no absolute reference at boot -- initialize() tares wherever it
-  // happens to be resting -- so the first L2 press establishes one. Until that
-  // happens both buttons move by a fixed amount RELATIVE to the current
-  // position; afterwards they move to ABSOLUTE angles measured from that zero.
-  //
-  //   before zeroing   L2 -> current - 32   (from rest, down to perpendicular)
-  //                     or current - 82   (if L1 was pressed first, so the claw
-  //                                        is up at parallel), then tare
-  //                    L1 -> current + 50   (up to parallel)
-  //   after zeroing    L2 -> 0              (perpendicular, re-tares every time)
-  //                    L1 -> 90             (parallel)
-  //                    L1+L2 -> 100         (matchload)
-  //
-  // The relative steps now agree with each other: 32 + 50 = 82, which is the
-  // CLAW_FIRST_L2_STEP_FROM_L1_DEG drop back down from parallel.
-  //
-  // ⚠️ But they disagree with CLAW_PARALLEL_DEG. The steps put parallel 82
-  // degrees above perpendicular; the constant says 90. So the first L1 press
-  // (relative, +50 from rest) and every L1 press after zeroing (absolute, 90)
-  // land 8 degrees apart. If 82 is the measured span, set CLAW_PARALLEL_DEG to
-  // 82 -- and CLAW_MATCHLOAD_DEG, which was parallel + 10, to 92.
+
   constexpr float CLAW_PERPENDICULAR_DEG = 0.0f;
   constexpr float CLAW_PARALLEL_DEG = 90.0f;
 
-  // L1 before the claw has been zeroed: there is no absolute frame yet, so it
-  // steps this far up from wherever the claw is resting.
   constexpr float CLAW_FIRST_L1_STEP_DEG = 50.0f;
   constexpr float CLAW_MATCHLOAD_DEG = 100.0f;
-  // --- homing --------------------------------------------------------------
-  // L2 does not aim at an angle. It drives the claw down at a gentle constant
-  // output until it runs into the bottom stop, then tares there -- so 0 is always
-  // the real end of travel, which no measured constant can drift away from.
-  // L1 aims at an angle instead; only L2 homes.
-  //
-  // Contact is detected two ways, whichever trips first:
-  //   current  -- pushing against a stop draws far more than free movement, and
-  //               this reacts before the claw has fully stopped, so it presses
-  //               into the stop more gently.
-  //   position -- has not moved more than the epsilon for several ticks. Catches
-  //               a soft jam that never spikes the current.
-  //
-  // The grace period covers motor inrush and the fact that the claw has not
-  // started moving yet in the first few ticks -- both look exactly like contact.
-  // The timeout is a backstop so a press can never drive indefinitely.
+
   constexpr float CLAW_HOMING_POWER = 40.0f; // -127..127, gentle on purpose
   constexpr std::int32_t CLAW_HOMING_CURRENT_MA = 1200;
   constexpr std::uint32_t CLAW_HOMING_GRACE_MS = 250;
@@ -318,11 +218,7 @@ void opcontrol() {
   // (matchload) mean anything.
   bool clawZeroed = false;
 
-  // Manual claw jog: RIGHT drives up, DOWN drives down, both open loop so the
-  // driver can eyeball an angle instead of trusting a number the encoder may no
-  // longer agree with. Jogging down auto-tares when it reaches the bottom stop,
-  // the same contact test L2 homing uses -- so a manual trip to the bottom
-  // re-references the claw for free.
+
   constexpr float CLAW_MANUAL_POWER = 127.0f * 0.6f; // 60%
   bool clawManualJogging = false;
   bool clawManualTared = false; // one tare per press, not once per tick
@@ -343,6 +239,7 @@ void opcontrol() {
   std::uint32_t l2PressedAt = 0;
 
   clawRotationLift.holdActively();
+  chassis.logReplayData(master, 100); // allows logging for driver replay
 
   while (true) {
     int forward = controller.get_analog(ANALOG_LEFT_Y);
@@ -357,18 +254,7 @@ void opcontrol() {
 
     clawGripper.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 
-    // R1/R2 jog the elevator open loop. liftLift (the PID subsystem on the same
-    // motors) is only used by moveTo() in autonomous, so the two never fight.
-    // R1/R2 jog the lift, and releasing both locks it where it is.
-    //
-    // Driven through liftLift rather than the raw motor group so the two cannot
-    // fight over ports 6/-7: setOutput() bypasses the PID for a straight jog and
-    // stops any running hold task itself, and holdActively() then starts a hold
-    // at the current height. The bool tracks the release edge so the hold task
-    // is started once instead of being torn down and rebuilt every idle tick.
-    //
-    // LIFT_JOG_POWER is liftlib's full scale (VOLTAGE_OUTPUT_LIMIT = 127), which
-    // maps to the same 12000 mV the raw move_voltage call used before.
+
     const bool r1 = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1);
     const bool r2 = controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2);
 
@@ -381,11 +267,6 @@ void opcontrol() {
     }
 
 
-    // B and Y drive the intake rollers and the claw gripper together, one button
-    // per direction. LEFT outtakes the intake on its own, without touching the
-    // gripper -- so the two are driven by separate if-chains below rather than
-    // one shared block, otherwise LEFT's branch would have to repeat the
-    // gripper's state and it would be easy to get them out of step.
     const bool intakeIn = controller.get_digital(pros::E_CONTROLLER_DIGITAL_B);
     const bool intakeOut = controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y);
     const bool outtakeOnly = controller.get_digital(pros::E_CONTROLLER_DIGITAL_LEFT);

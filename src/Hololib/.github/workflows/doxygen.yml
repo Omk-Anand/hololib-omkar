@@ -1,0 +1,78 @@
+name: Build Documentation
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress one.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Doxygen + Graphviz
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Download Doxygen Awesome theme
+        working-directory: docs
+        run: |
+          DA_VERSION=v2.3.4
+          BASE=https://raw.githubusercontent.com/jothepro/doxygen-awesome-css/$DA_VERSION
+          for f in \
+            doxygen-awesome.css \
+            doxygen-awesome-sidebar-only.css \
+            doxygen-awesome-sidebar-only-darkmode-toggle.css \
+            doxygen-awesome-darkmode-toggle.js \
+            doxygen-awesome-fragment-copy-button.js \
+            doxygen-awesome-paragraph-link.js \
+            doxygen-awesome-interactive-toc.js \
+            doxygen-awesome-tabs.js; do
+            wget -q "$BASE/$f"
+          done
+
+      - name: Generate and patch header/footer
+        working-directory: docs
+        run: |
+          doxygen -w html header.html footer.html style.css Doxyfile
+          python3 patch_header.py
+
+      - name: Build documentation
+        working-directory: docs
+        run: doxygen Doxyfile
+
+      - name: Assemble Pages site (landing page at root, docs under /docs)
+        run: |
+          rm -rf public
+          mkdir -p public/docs public/assets/diagrams
+          cp -r docs/build/html/. public/docs/
+          cp docs/landing/index.html public/index.html
+          cp docs/diagrams/*.svg public/assets/diagrams/
+          touch public/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

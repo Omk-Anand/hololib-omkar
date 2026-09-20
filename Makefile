@@ -11,6 +11,8 @@ INCDIR=$(ROOT)/include
 WARNFLAGS+=
 EXTRA_CFLAGS=
 EXTRA_CXXFLAGS=
+EXTRA_INCDIR+=$(SRCDIR)/Hololib/include
+EXCLUDE_SRCDIRS+=$(SRCDIR)/Hololib/include $(SRCDIR)/Hololib/src/main.cpp
 
 USE_PACKAGE:=1
 
