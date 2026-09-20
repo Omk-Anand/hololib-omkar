@@ -182,14 +182,14 @@ void autonomous() {
     };
 
     intake.move_voltage(-12000);
-    pros::delay(700);
+    pros::delay(600);
     intake.brake();
     pros::delay(200);
     chassis.moveToPoint(0, 5, driveParams);
     chassis.turnToHeading(60, turnParams);
     clawGripper.move_voltage(-12000);
     chassis.moveToPoint(11, 9, driveParams);
-    clawRotationLift.moveTo(110);
+    clawRotationLift.moveTo(120);
     liftLift.moveTo(4);
     chassis.moveToPose(20, 13, 75, driveParams);
     clawGripper.move_voltage(0);
