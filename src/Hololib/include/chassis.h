@@ -528,4 +528,7 @@ private:
   std::vector<float> prevTrackingPositions;
   bool useTrackingWheels = false;
   float trackingWheelMeasNoise = 0.0005f;
+
+  pros::Task *replayLogTask = nullptr;
+  bool replayLoggingEnabled = false;
 };

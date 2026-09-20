@@ -292,7 +292,8 @@ void Chassis::turnToHeading(float targetDeg, MoveParams params) {
           tPID.setGains(thetaSched.getGains(error));
           float output = (float)tPID.update(error);
 
-          if (std::abs(output) > 1e-3f && std::abs(output) < params.minSpeed)
+          if (std::abs(output) > 1e-3f && std::abs(output) < params.minSpeed &&
+              std::abs(error) > params.exitRange)
             output = std::copysign(params.minSpeed, output);
           output = std::clamp(output, -params.maxRotationSpeed,
                               params.maxRotationSpeed);
@@ -348,7 +349,8 @@ void Chassis::turnToPoint(float tx, float ty, MoveParams params) {
           tPID.setGains(thetaSched.getGains(error));
           float output = (float)tPID.update(error);
 
-          if (std::abs(output) > 1e-3f && std::abs(output) < params.minSpeed)
+          if (std::abs(output) > 1e-3f && std::abs(output) < params.minSpeed &&
+              std::abs(error) > params.exitRange)
             output = std::copysign(params.minSpeed, output);
           output = std::clamp(output, -params.maxRotationSpeed,
                               params.maxRotationSpeed);
@@ -430,7 +432,8 @@ void Chassis::moveToPoint(float tx, float ty, MoveParams params,
           float outT = angleCorrection ? (float)tPID.update(angleError) : 0.0f;
 
           float mag = std::hypot(outX_local, outY_local);
-          if (mag > 1e-3f && mag < params.minSpeed) {
+          if (mag > 1e-3f && mag < params.minSpeed &&
+              distErr > params.exitRange) {
             float s = params.minSpeed / mag;
             outX_local *= s;
             outY_local *= s;
@@ -519,7 +522,8 @@ void Chassis::moveRelative(float forward, float sideways, MoveParams params,
           float outT = holdHeading ? (float)tPID.update(angleError) : 0.0f;
 
           float mag = std::hypot(outX_g, outY_g);
-          if (mag > 1e-3f && mag < params.minSpeed) {
+          if (mag > 1e-3f && mag < params.minSpeed &&
+              distErr > params.exitRange) {
             float s = params.minSpeed / mag;
             outX_g *= s;
             outY_g *= s;

@@ -24,7 +24,11 @@ void Chassis::calibrate() {
   prev_fl = 0, prev_fr = 0, prev_bl = 0, prev_br = 0;
   prev_heading = 0;
   targetHeadingDriveControl = 0;
-  for (int i = 0; i < motors.size(); i++) {
+  driveControlHeadingInit = false;
+  driveControlWasRotating = false;
+  driveControlLastRotationTime = 0;
+  driveControlHeadingPID.reset();
+  for (size_t i = 0; i < motors.size(); i++) {
     try {
       if (motors[i].get_temperature() > 60) {
         std::cout << "Motor " + std::to_string(i) + " overheating" << std::endl;
@@ -190,21 +194,19 @@ void Chassis::setThetaGains(std::vector<ScheduledGain> steps) {
 void Chassis::driveControl(float forward, float sideways, float rotation,
                            DriveCurves drivecurves, bool fieldCentric,
                            float headingOffset, DriveCorrection correction) {
-  static bool headingInitialized = false;
-  static float targetHeading = 0.0f;
-  static PID headingPID(0, 0, 0, 0);
-  static uint32_t lastRotationTime = 0;
-  static bool wasRotating = false;
+  float &targetHeading = targetHeadingDriveControl;
+  PID &headingPID = driveControlHeadingPID;
+  uint32_t &lastRotationTime = driveControlLastRotationTime;
+  bool &wasRotating = driveControlWasRotating;
   constexpr float MAX_DRIVE_INPUT = 127.0f;
   constexpr float SETTLE_DELAY_MS = 150.0f;
   constexpr float MAX_CORRECTION = 40.0f;
 
-  if (!headingInitialized) {
+  if (!driveControlHeadingInit) {
     targetHeading = getPose(false).theta;
-    headingPID.setGains(
-        {correction.kP, correction.kI, correction.kD, 0.0, 0.0});
-    headingInitialized = true;
+    driveControlHeadingInit = true;
   }
+  headingPID.setGains({correction.kP, correction.kI, correction.kD, 0.0, 0.0});
 
   auto applyCurve = [&](float x, const DriveCurve &c) -> float {
     if (std::abs(x) < c.deadzone)
@@ -267,8 +269,6 @@ void Chassis::driveControl(float forward, float sideways, float rotation,
     if (wasRotating) {
       targetHeading = getPose(false).theta;
       headingPID.reset();
-      headingPID.setGains(
-          {correction.kP, correction.kI, correction.kD, 0.0, 0.0});
       wasRotating = false;
     }
 
@@ -466,3 +466,126 @@ float Chassis::degToRad(float deg) { return deg * DEG2RAD; }
  *@return void
  */
 void Chassis::setEKFstate(bool state) { this->config.kfEnabled = state; }
+
+void Chassis::curveCircle(float targetThetaDeg, float radius, MoveParams params,
+                          CurveDirection direction) {
+  if (std::abs(radius) < 1e-3f) {
+    turnToHeading(targetThetaDeg, params);
+    return;
+  }
+
+  motion.enqueue(
+      [=, this]() {
+        uint32_t start = pros::millis();
+        uint32_t settleStart = 0;
+        constexpr uint32_t settleTime = 120;
+        constexpr float angleExitDeg = 2.0f;
+
+        PID xPID(0, 0, 0, 0);
+        PID yPID(0, 0, 0, 0);
+        PID tPID(0, 0, 0, 0);
+
+        Pose sp = getPose(false);
+        
+        auto directedAngleError = [](float target, float current,
+                                     CurveDirection dir) {
+          float shortest = getAngleError(target, current); 
+          if (dir == CurveDirection::Auto)
+            return shortest;
+
+          if (dir == CurveDirection::CW) {
+            if (shortest <= -90.0f) {
+              return shortest + 360.0f;
+            }
+            return shortest;
+          } else {
+            if (shortest >= 90.0f) {
+              return shortest - 360.0f;
+            }
+            return shortest;
+          }
+        };
+
+        float initErr = directedAngleError(targetThetaDeg, sp.theta, direction);
+        float dir = (initErr >= 0) ? 1.0f : -1.0f;
+        float arcRadius = std::abs(radius);
+        float maxCurveTranslation =
+            std::min(params.maxTranslationSpeed, 60.0f);
+        float maxCurveRotation = std::min(params.maxRotationSpeed, 70.0f);
+
+        float startRad = sp.theta * DEG2RAD;
+        float centerX = sp.x + dir * arcRadius * std::cos(startRad);
+        float centerY = sp.y - dir * arcRadius * std::sin(startRad);
+        float targetRad = targetThetaDeg * DEG2RAD;
+        float finalX = centerX - dir * arcRadius * std::cos(targetRad);
+        float finalY = centerY + dir * arcRadius * std::sin(targetRad);
+
+        while (pros::millis() - start < params.timeout) {
+          Pose curr = getPose(false);
+          float angleError =
+              directedAngleError(targetThetaDeg, curr.theta, direction);
+          float finalDistErr = std::hypot(finalX - curr.x, finalY - curr.y);
+
+          if (params.earlyExitRange > 0.0f &&
+              finalDistErr <= params.earlyExitRange)
+            return;
+
+          bool posSettled = finalDistErr < params.exitRange;
+          bool angleSettled = std::abs(angleError) < angleExitDeg;
+          if (posSettled && angleSettled) {
+            if (settleStart == 0)
+              settleStart = pros::millis();
+            if (pros::millis() - settleStart >= settleTime)
+              break;
+          } else {
+            settleStart = 0;
+          }
+
+          float toCenterX = centerX - curr.x;
+          float toCenterY = centerY - curr.y;
+          float distToCenter = std::hypot(toCenterX, toCenterY);
+          float radiusError = distToCenter - arcRadius;
+
+          float rad = curr.theta * DEG2RAD;
+          float cosH = std::cos(rad), sinH = std::sin(rad);
+          float centerLocalX = toCenterX * cosH - toCenterY * sinH;
+          float centerSide = centerLocalX >= 0.0f ? 1.0f : -1.0f;
+
+          float arcRemaining = std::abs(angleError) * DEG2RAD * arcRadius;
+
+          xPID.setGains(xSched.getGains(radiusError));
+          yPID.setGains(ySched.getGains(arcRemaining));
+          tPID.setGains(thetaSched.getGains(angleError));
+
+          float outX_local = (float)xPID.update(radiusError * centerSide);
+          float outY_local = (float)yPID.update(arcRemaining);
+          float outT = (float)tPID.update(angleError);
+
+          float mag = std::hypot(outX_local, outY_local);
+          if (!posSettled && mag > 1e-3f && mag < params.minSpeed) {
+            float s = params.minSpeed / mag;
+            outX_local *= s;
+            outY_local *= s;
+          }
+          if (mag > maxCurveTranslation) {
+            float s = maxCurveTranslation / mag;
+            outX_local *= s;
+            outY_local *= s;
+          }
+          outT = std::clamp(outT, -maxCurveRotation, maxCurveRotation);
+
+          setMotorVoltages(calculateHolonomic(outX_local, outY_local, outT));
+          pros::delay(10);
+        }
+        brake();
+      },
+      params.async);
+}
+
+void Chassis::setMoveParams(MoveParams params) {
+  this->defaultParams = params;
+}
+
+void Chassis::setRobotDimensionsAvoidance(float width, float height) {
+  obstacles.setRobotDimensions(width, height);
+}

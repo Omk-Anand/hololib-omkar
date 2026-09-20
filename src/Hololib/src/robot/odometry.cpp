@@ -157,7 +157,7 @@ void Chassis::odometryTask() {
         dy_local = sumDyVertical / static_cast<float>(numVertical);
       }
 
-      if (numHorizontal == 0) {
+      if (numHorizontal == 0 || numVertical == 0) {
         float raw_fl_tw = safeEnc(frontLeft, prev_fl);
         float raw_fr_tw = safeEnc(frontRight, prev_fr);
         float raw_bl_tw = safeEnc(backLeft, prev_bl);
@@ -166,23 +166,12 @@ void Chassis::odometryTask() {
         Eigen::Vector4f prev_enc_v(prev_fl, prev_fr, prev_bl, prev_br);
         Eigen::Vector4f wheel_deltas_motor = (raw_enc - prev_enc_v) * d_per_deg;
         Eigen::Vector2f motor_local = kinematics * wheel_deltas_motor;
-        dx_local = motor_local.x();
-        prev_fl = raw_fl_tw;
-        prev_fr = raw_fr_tw;
-        prev_bl = raw_bl_tw;
-        prev_br = raw_br_tw;
-      }
-
-      if (numVertical == 0) {
-        float raw_fl_tw = safeEnc(frontLeft, prev_fl);
-        float raw_fr_tw = safeEnc(frontRight, prev_fr);
-        float raw_bl_tw = safeEnc(backLeft, prev_bl);
-        float raw_br_tw = safeEnc(backRight, prev_br);
-        Eigen::Vector4f raw_enc(raw_fl_tw, raw_fr_tw, raw_bl_tw, raw_br_tw);
-        Eigen::Vector4f prev_enc_v(prev_fl, prev_fr, prev_bl, prev_br);
-        Eigen::Vector4f wheel_deltas_motor = (raw_enc - prev_enc_v) * d_per_deg;
-        Eigen::Vector2f motor_local = kinematics * wheel_deltas_motor;
-        dy_local = motor_local.y();
+        if (numHorizontal == 0) {
+          dx_local = motor_local.x();
+        }
+        if (numVertical == 0) {
+          dy_local = motor_local.y();
+        }
         prev_fl = raw_fl_tw;
         prev_fr = raw_fr_tw;
         prev_bl = raw_bl_tw;
@@ -232,13 +221,6 @@ void Chassis::odometryTask() {
       Eigen::Vector4f prev_enc(prev_fl, prev_fr, prev_bl, prev_br);
       Eigen::Vector4f wheel_deltas = (raw_enc - prev_enc) * d_per_deg;
 
-      float track_radius =
-          (config.drivetrainWidth + config.drivetrainLength) / 2.0f;
-      float vt_inches = (wheel_deltas(0) - wheel_deltas(1) + wheel_deltas(2) -
-                         wheel_deltas(3)) /
-                        4.0f;
-      float d_theta_wheels = vt_inches / (y_component * track_radius);
-
       Eigen::Vector2f local_delta = kinematics * wheel_deltas;
       poseMutex.take();
 
@@ -246,7 +228,7 @@ void Chassis::odometryTask() {
       motionDistTraveled += step_dist;
 
       if (config.kfEnabled) {
-        ekf.predict(local_delta.x(), local_delta.y(), d_theta_wheels);
+        ekf.predict(local_delta.x(), local_delta.y(), d_theta_meas);
 
         float current_w = d_theta_meas / 0.01f;
         float dynamic_R = measurementNoise + std::abs(current_w) * 0.005f;
@@ -284,6 +266,7 @@ void Chassis::odometryTask() {
  *@return void
  */
 void Chassis::addTrackingWheel(TrackingWheelConfig config) {
+  poseMutex.take();
   trackingWheelConfigs.push_back(config);
   trackingWheelSensors.emplace_back(config.port);
 
@@ -293,6 +276,7 @@ void Chassis::addTrackingWheel(TrackingWheelConfig config) {
 
   ekf.setTrackingWheelNoise(0.0003f, 0.0003f, 0.001f);
   trackingWheelMeasNoise = 0.0005f;
+  poseMutex.give();
 
   std::cout << "[Chassis] Added tracking wheel on port "
             << static_cast<int>(config.port)
@@ -309,12 +293,14 @@ void Chassis::addTrackingWheel(TrackingWheelConfig config) {
  *@return void
  */
 void Chassis::clearTrackingWheels() {
+  poseMutex.take();
   trackingWheelConfigs.clear();
   trackingWheelSensors.clear();
   prevTrackingPositions.clear();
   useTrackingWheels = false;
 
   ekf.setProcessNoise(0.001f, 0.001f, 0.003f, 0.0001f);
+  poseMutex.give();
   std::cout
       << "[Chassis] Tracking wheels cleared, reverted to motor encoder odometry"
       << std::endl;

@@ -51,11 +51,13 @@ void Chassis::getControllerInput(pros::Controller master) {
  *@return void
  */
 void Chassis::logReplayData(pros::Controller master, int timeout_ms) {
-  pros::Task log_task([=, this]() {
+  disableReplayDataLogging();
+  replayLoggingEnabled = true;
+  replayLogTask = new pros::Task([=, this]() {
     Pose lastPose = getPose();
     int safe_timeout = (timeout_ms < 20) ? 20 : timeout_ms;
 
-    while (true) {
+    while (replayLoggingEnabled) {
       Pose pose = getPose();
 
       double deltaX = std::abs(pose.x - lastPose.x);
@@ -124,14 +126,24 @@ void Chassis::runDriverReplay(std::vector<PathPoint> data, float lookahead) {
   if (current_segment.size() >= 2) {
     segments.push_back(current_segment);
   }
-  bool is_reversed = false;
-
   for (const auto &seg : segments) {
     if (seg.size() >= 2) {
       followPath(seg, lookahead, defaultParams, HeadingMode::CustomAngles, 0.0f,
-                 is_reversed);
+                 false);
       waitUntilDone();
-      is_reversed = !is_reversed;
     }
+  }
+}
+
+/**
+ *@brief Stops the driver replay logging task started by logReplayData.
+ *@return void
+ */
+void Chassis::disableReplayDataLogging() {
+  replayLoggingEnabled = false;
+  if (replayLogTask != nullptr) {
+    replayLogTask->join();
+    delete replayLogTask;
+    replayLogTask = nullptr;
   }
 }

@@ -101,7 +101,7 @@ Chassis chassis(frontl,
                                             // be tuned to EFFECTIVE wheel
                                             // diameter)
                  .gearRatio = 0.5,          // gear ratio of the drivetrain
-                 .kfEnabled = false});      // Enables ekf, only use if you know
+                 .kfEnabled = true});       // Enables ekf, only use if you know
                                             // how to tune the process and
                                             // measurement noise.
 
@@ -160,11 +160,8 @@ void simulation() {}
 
 void autonomous() {
     chassis.setPose(0, 0, 0);
-
-    intake.move_voltage(-12000);
-    pros::delay(600);
-    intake.brake();
-    chassis.moveToPoint(0, 5, {});
+    chassis.setEKFstate(false);
+    chassis.turnToHeading(90, {.earlyExitRange = 2.5, .async = false});
     
 
 }

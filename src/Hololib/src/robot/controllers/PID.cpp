@@ -5,13 +5,13 @@
 PID::PID(double kP, double kI, double kD, double kF, double windupRange,
          bool signFlipReset, double slew)
     : m_gains({kP, kI, kD, kF, slew}), m_windupRange(windupRange),
-      m_signFlipReset(signFlipReset), m_integralLimit(windupRange),
-      m_alpha(0.2), m_staticThreshold(3.0) {}
+      m_signFlipReset(signFlipReset), m_alpha(0.2),
+      m_integralLimit(0), m_staticThreshold(3.0) {}
 
 PID::PID(const PIDGains &gains, double windupRange, bool signFlipReset)
     : m_gains(gains), m_windupRange(windupRange),
-      m_signFlipReset(signFlipReset), m_integralLimit(windupRange),
-      m_alpha(0.2), m_staticThreshold(3.0) {}
+      m_signFlipReset(signFlipReset), m_alpha(0.2),
+      m_integralLimit(0), m_staticThreshold(3.0) {}
 
 PIDGains PID::getGains() { return m_gains; }
 
@@ -41,7 +41,9 @@ double PID::update(double error, double measurement) {
 
   m_filteredDerivative = m_alpha * derivative + (1.0 - m_alpha) * m_filteredDerivative;
 
-  m_integral += error * dt;
+  if (m_windupRange == 0 || std::abs(error) <= m_windupRange) {
+    m_integral += error * dt;
+  }
 
   if (sgn(error) != sgn(m_previousError) && m_signFlipReset) {
     m_integral = 0;
@@ -94,8 +96,7 @@ void PID::setSignFlipReset(bool signFlipReset) {
 bool PID::getSignFlipReset() { return m_signFlipReset; }
 
 void PID::setWindupRange(double windupRange) { 
-  m_windupRange = windupRange; 
-  m_integralLimit = windupRange;
+  m_windupRange = windupRange;
 }
 
 double PID::getWindupRange() { return m_windupRange; }
