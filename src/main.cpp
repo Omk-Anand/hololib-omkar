@@ -182,7 +182,7 @@ void autonomous() {
     };
 
     intake.move_voltage(-12000);
-    pros::delay(600);
+    pros::delay(750);
     intake.brake();
     pros::delay(200);
     chassis.moveToPoint(0, 5, driveParams);
@@ -190,7 +190,7 @@ void autonomous() {
     clawGripper.move_voltage(-12000);
     chassis.moveToPoint(11, 9, driveParams);
     clawRotationLift.moveTo(120);
-    liftLift.moveTo(4);
+    liftLift.moveTo(4.5);
     chassis.moveToPose(20, 13, 75, driveParams);
     clawGripper.move_voltage(0);
     clawGripper.move_voltage(12000);
@@ -202,8 +202,7 @@ void autonomous() {
 void testFunction() { std::cout << "Function called" << std::endl; }
 
 void opcontrol() {
-    chassis.setPose(0, 0, 00);
-    chassis.setEKFstate(false); // turn off EKF for driver control
+    chassis.setPose(0, 0, 0);
 
     // Example drive curves
     DriveCurve movement_curve{.curve_multipler = 1.01, .deadzone = 5, .minimum_output = 5};
